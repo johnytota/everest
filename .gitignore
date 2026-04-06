@@ -1,0 +1,31 @@
+# Ambiente virtual
+venv/
+.venv/
+env/
+
+# Credenciais e configuração local
+.env
+.env.example
+cookies.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# MongoDB local
+data/
+
+# Logs
+*.log
