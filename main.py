@@ -69,6 +69,15 @@ def run_cycle(session, db) -> None:
     # 2. Guardar leilões na BD
     upsert_leiloes(db, leiloes)
 
+    # 2b. Marcar como encerrados os leilões que já não aparecem na homepage
+    sale_ids_ativos = {l.sale_id for l in leiloes}
+    resultado = db.leiloes.update_many(
+        {"estado": 3, "sale_id": {"$nin": list(sale_ids_ativos)}},
+        {"$set": {"estado": 4}},
+    )
+    if resultado.modified_count:
+        logger.info("Leilões encerrados: %d", resultado.modified_count)
+
     # 3. Para cada leilão, obter e guardar veículos
     for leilao in leiloes:
         logger.info("A processar leilão %s — %s", leilao.sale_id, leilao.nome)

@@ -39,6 +39,7 @@ HEADERS = {
 class Leilao:
     sale_id:      str
     nome:         str
+    descricao:    str
     sale_type:    str   # Auction, Tender, FlashSale
     data_inicio:  str
     data_fim:     str
@@ -125,6 +126,10 @@ def get_leiloes_pt(session: requests.Session) -> list[Leilao]:
         nome_el = container.select_one("h2.card-subtitle a")
         nome = nome_el.get_text(strip=True) if nome_el else ""
 
+        # Descrição do leilão
+        desc_el = container.select_one("p.sales-description")
+        descricao = desc_el.get_text(strip=True) if desc_el else ""
+
         # Número de veículos
         num_el = container.select_one("div.sale-remaining-container span.align-middle")
         num_veiculos = int(num_el.get_text(strip=True)) if num_el else 0
@@ -132,6 +137,7 @@ def get_leiloes_pt(session: requests.Session) -> list[Leilao]:
         leilao = Leilao(
             sale_id=sale_id,
             nome=nome,
+            descricao=descricao,
             sale_type=sale_type,
             data_inicio=data_inicio,
             data_fim=data_fim,
