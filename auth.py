@@ -1,19 +1,21 @@
 """
 Módulo de autenticação para o Ayvens Carmarket.
-- Carrega cookies guardados em ficheiro
-- Valida se a sessão ainda é válida
-- Faz login automático quando necessário
-- Guarda cookies para reutilização
+
+Fluxo:
+1. Tenta carregar cookies guardados em ficheiro
+2. Valida se a sessão ainda é válida (request à homepage)
+3. Se inválida, usa Playwright (browser real headless) para fazer login
+4. Extrai os cookies do browser e guarda em ficheiro
+5. Devolve requests.Session pronta a usar
 """
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +34,16 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# Cookies obrigatórios para uma sessão válida
 REQUIRED_COOKIES = {".ASPXAUTHCARMARKETV2", ".Carmarket.Cookie"}
 
 
-def _save_cookies(session: requests.Session) -> None:
-    """Guarda os cookies da sessão em ficheiro JSON."""
-    cookies_dict = dict(session.cookies)
-    COOKIES_FILE.write_text(json.dumps(cookies_dict, indent=2))
+def _save_cookies(cookies: dict) -> None:
+    COOKIES_FILE.write_text(json.dumps(cookies, indent=2))
     logger.info("Cookies guardados em %s", COOKIES_FILE)
 
 
 def _load_cookies(session: requests.Session) -> bool:
-    """
-    Carrega cookies do ficheiro para a sessão.
-    Retorna True se o ficheiro existe e tem os cookies obrigatórios.
-    """
+    """Carrega cookies do ficheiro. Retorna True se válidos e não expirados."""
     if not COOKIES_FILE.exists():
         logger.info("Ficheiro de cookies não encontrado.")
         return False
@@ -58,16 +54,13 @@ def _load_cookies(session: requests.Session) -> bool:
         logger.warning("Erro ao ler cookies: %s", e)
         return False
 
-    # Verificar se tem os cookies obrigatórios
     if not REQUIRED_COOKIES.issubset(cookies_dict.keys()):
         logger.info("Cookies incompletos — faltam cookies de autenticação.")
         return False
 
-    # Verificar expiração via CarmarketV2SessionExpirationTime
     expiration_ms = cookies_dict.get("CarmarketV2SessionExpirationTime")
     if expiration_ms:
-        expiration_s = int(expiration_ms) / 1000
-        if time.time() > expiration_s:
+        if time.time() > int(expiration_ms) / 1000:
             logger.info("Cookie de sessão expirado.")
             return False
 
@@ -79,140 +72,198 @@ def _load_cookies(session: requests.Session) -> bool:
 
 
 def _is_session_valid(session: requests.Session) -> bool:
-    """
-    Valida a sessão fazendo um pedido à homepage.
-    Retorna True se estamos autenticados (IsAuthenticated: true no sessionStorage).
-    """
+    """Valida a sessão fazendo um pedido à homepage."""
     try:
         resp = session.get(HOME_URL, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-
-        # O site injeta IsAuthenticated no sessionStorage dentro do HTML
         if '"IsAuthenticated":true' in resp.text:
             logger.info("Sessão válida confirmada.")
             return True
-
-        # Se redireccionou para login ou não tem autenticação
-        if "Account/Login" in resp.url or '"IsAuthenticated":false' in resp.text:
-            logger.info("Sessão inválida — redirecionado para login.")
-            return False
-
-        # Verificação extra: se não encontrou o marcador, assumir inválido
-        logger.warning("Não foi possível confirmar autenticação — a fazer login.")
+        logger.info("Sessão inválida.")
         return False
-
     except requests.RequestException as e:
         logger.error("Erro ao validar sessão: %s", e)
         return False
 
 
-def _get_login_token(session: requests.Session) -> str | None:
+def _login_playwright(username: str, password: str) -> dict | None:
     """
-    Obtém o token anti-CSRF da página de login (campo __RequestVerificationToken).
+    Usa Playwright (browser headless) para fazer login no Ayvens Carmarket.
+    Devolve dicionário de cookies ou None em caso de falha.
     """
-    try:
-        resp = session.get(LOGIN_URL, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        token_input = soup.find("input", {"name": "__RequestVerificationToken"})
-        if token_input:
-            return token_input.get("value")
-        logger.warning("Token CSRF não encontrado na página de login.")
-        return None
-    except requests.RequestException as e:
-        logger.error("Erro ao obter página de login: %s", e)
-        return None
+    logger.info("A iniciar login via Playwright...")
 
-
-def _do_login(session: requests.Session, username: str, password: str) -> bool:
-    """
-    Executa o login com username e password.
-    Tenta primeiro com token CSRF; se não encontrar, tenta sem ele.
-    Retorna True se o login foi bem sucedido.
-    """
-    logger.info("A iniciar login...")
-
-    token = _get_login_token(session)
-
-    payload = {
-        "Login":    username,
-        "Password": password,
-        "RememberMe": "false",
-    }
-    if token:
-        payload["__RequestVerificationToken"] = token
-    else:
-        logger.warning("Token CSRF não encontrado — a tentar login sem token.")
-
-    headers = {
-        **HEADERS,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": LOGIN_URL,
-        "Origin":  "https://carmarket.ayvens.com",
-    }
-
-    try:
-        resp = session.post(
-            LOGIN_URL,
-            data=payload,
-            headers=headers,
-            timeout=15,
-            allow_redirects=True,
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=False,  # visível — evita deteção anti-bot
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
         )
-        resp.raise_for_status()
+        context = browser.new_context(
+            user_agent=HEADERS["User-Agent"],
+            locale="pt-PT",
+            viewport={"width": 1280, "height": 800},
+        )
+        # Ocultar WebDriver flag
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        page = context.new_page()
 
-        # Verificar se o login foi bem sucedido
-        if '"IsAuthenticated":true' in resp.text:
-            logger.info("Login bem sucedido.")
-            _save_cookies(session)
-            return True
+        try:
+            # Visitar homepage e aguardar que o JS inicialize completamente
+            logger.info("Playwright — a carregar homepage...")
+            page.goto(HOME_URL, wait_until="networkidle", timeout=30000)
 
-        # Se ainda está na página de login, as credenciais estão erradas
-        if "Account/Login" in resp.url:
-            logger.error("Login falhado — credenciais incorretas.")
-            return False
+            # Aceitar banner de cookies GDPR se aparecer (não bloqueante)
+            try:
+                page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=10000, state="visible")
+                logger.info("Playwright — a aceitar banner de cookies GDPR...")
+                page.click("button#onetrust-accept-btn-handler")
+                page.wait_for_timeout(1000)
+                logger.info("Playwright — cookies GDPR aceites.")
+            except Exception:
+                logger.info("Playwright — banner de cookies não apareceu, a continuar...")
 
-        # Sucesso com redirect para outra página — só guarda se tiver cookies de auth
-        if resp.status_code == 200 and "carmarket.ayvens.com" in resp.url:
-            cookies = dict(session.cookies)
-            if REQUIRED_COOKIES.issubset(cookies.keys()):
-                logger.info("Login bem sucedido (redirect).")
-                _save_cookies(session)
-                return True
-            logger.error("Login falhado — cookies de autenticação não recebidos.")
-            return False
+            page.wait_for_timeout(2000)
 
-        logger.error("Login falhado — resposta inesperada: %s", resp.url)
+            # Screenshot para diagnóstico
+            page.screenshot(path="debug_homepage.png")
+            logger.info("Playwright — screenshot guardado em debug_homepage.png")
+            logger.info("Playwright — URL atual: %s", page.url)
+
+            # Listar TODOS os links da página para diagnóstico
+            links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href + ' | ' + e.textContent.trim().substring(0,50))")
+            logger.info("Playwright — todos os links (%d): %s", len(links), links[:20])
+            login_links = [l for l in links if any(k in l.lower() for k in ["login", "signin", "entrar", "aceder", "conta", "account"])]
+            logger.info("Playwright — links de login encontrados: %s", login_links)
+
+            # Tentar clicar no botão de login
+            login_found = False
+            for selector in [
+                "#btn_signIn",
+                "button#btn_signIn",
+                "carmarket-button[buttonid='btn_signIn'] button",
+                "button.secondary:has-text('Login')",
+                "button:has-text('Login')",
+            ]:
+                try:
+                    el = page.query_selector(selector)
+                    if el and el.is_visible():
+                        logger.info("Playwright — a clicar botão login (%s)...", selector)
+                        el.click()
+                        login_found = True
+                        break
+                except Exception as e:
+                    logger.warning("Playwright — erro ao clicar %s: %s", selector, e)
+
+            if not login_found:
+                logger.error("Botão de login não encontrado.")
+                browser.close()
+                return None
+
+            # Aguardar modal de login abrir
+            logger.info("Playwright — a aguardar modal de login...")
+            page.wait_for_selector("#userName", state="visible", timeout=10000)
+
+            # Preencher formulário do modal
+            logger.info("Playwright — a preencher credenciais...")
+            page.fill("#userName", username)
+            page.fill("#password", password)
+
+            # Submeter — procurar botão de submit dentro do modal
+            page.click("button[type='submit'], carmarket-button[buttonid*='login'] button, button:has-text('Entrar'), button:has-text('Login'):not(.secondary)")
+
+            # Aguardar fecho do modal ou navegação
+            page.wait_for_load_state("networkidle", timeout=30000)
+
+            # Aguardar que os cookies de autenticação apareçam
+            logger.info("Playwright — a verificar autenticação...")
+            for _ in range(10):
+                pw_cookies = context.cookies()
+                cookies_dict = {c["name"]: c["value"] for c in pw_cookies}
+                if REQUIRED_COOKIES.issubset(cookies_dict.keys()):
+                    break
+                page.wait_for_timeout(1000)
+            else:
+                logger.error("Login falhado — cookies de autenticação não recebidos após submissão.")
+                page.screenshot(path="debug_login_failed.png")
+                browser.close()
+                return None
+
+            # Extrair cookies
+            pw_cookies = context.cookies()
+            cookies_dict = {c["name"]: c["value"] for c in pw_cookies}
+
+            if not REQUIRED_COOKIES.issubset(cookies_dict.keys()):
+                logger.error("Login falhado — cookies de autenticação não recebidos.")
+                logger.debug("Cookies recebidos: %s", list(cookies_dict.keys()))
+                browser.close()
+                return None
+
+            logger.info("Login via Playwright bem sucedido.")
+            browser.close()
+            return cookies_dict
+
+        except Exception as e:
+            logger.error("Erro durante login Playwright: %s", e, exc_info=True)
+            browser.close()
+            return None
+
+
+def session_expiration_ts(session: requests.Session) -> float | None:
+    """Devolve o timestamp de expiração da sessão em segundos Unix, ou None."""
+    val = session.cookies.get("CarmarketV2SessionExpirationTime", domain="carmarket.ayvens.com")
+    if not val:
+        try:
+            cookies_dict = json.loads(COOKIES_FILE.read_text())
+            val = cookies_dict.get("CarmarketV2SessionExpirationTime")
+        except Exception:
+            return None
+    return int(val) / 1000 if val else None
+
+
+def renew_session(session: requests.Session, username: str, password: str) -> bool:
+    """
+    Faz login via Playwright e atualiza os cookies da sessão in-place.
+    Devolve True se bem sucedido.
+    """
+    cookies = _login_playwright(username, password)
+    if not cookies:
         return False
-
-    except requests.RequestException as e:
-        logger.error("Erro durante login: %s", e)
-        return False
+    _save_cookies(cookies)
+    session.cookies.clear()
+    for name, value in cookies.items():
+        session.cookies.set(name, value, domain="carmarket.ayvens.com")
+    logger.info("Sessão renovada com sucesso.")
+    return True
 
 
 def get_authenticated_session(username: str, password: str) -> requests.Session | None:
     """
     Retorna uma sessão autenticada.
-    
-    Fluxo:
-    1. Tenta carregar cookies guardados
-    2. Valida se a sessão ainda é válida
-    3. Se inválida, faz login e guarda novos cookies
-    4. Retorna a sessão pronta a usar ou None em caso de falha
+
+    1. Tenta cookies guardados → valida
+    2. Se inválidos, faz login com Playwright → guarda novos cookies
+    3. Devolve requests.Session ou None
     """
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Tentar usar cookies existentes
     if _load_cookies(session):
         if _is_session_valid(session):
             return session
-        else:
-            logger.info("Cookies carregados mas sessão inválida — a renovar login.")
+        logger.info("Cookies carregados mas sessão inválida — a renovar login.")
+        session.cookies.clear()
 
-    # Fazer login
-    if _do_login(session, username, password):
-        return session
+    # Login via Playwright
+    cookies = _login_playwright(username, password)
+    if not cookies:
+        logger.error("Não foi possível autenticar.")
+        return None
 
-    logger.error("Não foi possível autenticar.")
-    return None
+    _save_cookies(cookies)
+    for name, value in cookies.items():
+        session.cookies.set(name, value, domain="carmarket.ayvens.com")
+
+    return session

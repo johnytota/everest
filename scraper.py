@@ -70,6 +70,9 @@ class Veiculo:
     is_sold:       bool
     is_withdrawn:  bool
     imagem_url:    str
+    # Campos calculados a partir do badge HTML
+    base_licitacao: float | None = None  # Preço base inicial (badge-starting)
+    has_offer:      bool = False          # True se já houve pelo menos uma licitação
     # Detalhes expandíveis
     carrocaria:       str = ""
     portas:           str = ""
@@ -159,7 +162,8 @@ def get_leiloes_pt(session: requests.Session) -> list[Leilao]:
 
 def _parse_bid_area(data_str: str) -> tuple[float | None, int]:
     """
-    Extrai BidAmount e OffersCount do atributo data-bid-area-information.
+    Extrai BidAmount do atributo data-bid-area-information.
+    OffersCount no JSON é sempre 0 — usar badge HTML para saber se há ofertas.
     Retorna (bid_amount, offers_count).
     """
     if not data_str:
@@ -329,6 +333,19 @@ def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
             bid_area_str.get("data-bid-area-information", "") if bid_area_str else ""
         )
 
+        # Badge de licitação — badge-starting = sem ofertas reais, outro class = tem ofertas
+        badge_starting = article.select_one(".badge-starting")
+        has_offer = badge_starting is None  # se não há badge-starting, já houve licitações
+        base_licitacao = None
+        if badge_starting:
+            strong = badge_starting.select_one("strong")
+            if strong:
+                raw = strong.get_text(strip=True).replace("\xa0", "").replace("\u00a0", "").replace(" ", "").replace("€", "").replace(",", ".")
+                try:
+                    base_licitacao = float(raw)
+                except ValueError:
+                    base_licitacao = bid_amount
+
         watchlist_el = article.select_one("div.vehicle-watchlist-ssr")
         is_sold, is_withdrawn = _parse_watchlist(
             watchlist_el.get("data-watchlist-information", "") if watchlist_el else ""
@@ -356,6 +373,8 @@ def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
             is_sold=is_sold,
             is_withdrawn=is_withdrawn,
             imagem_url=imagem_url,
+            base_licitacao=base_licitacao,
+            has_offer=has_offer,
             carrocaria=details["carrocaria"],
             portas=details["portas"],
             lugares=details["lugares"],

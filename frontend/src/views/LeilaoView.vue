@@ -72,7 +72,7 @@
         <Column header="Valor Atual" sortable sortField="bid_amount" style="width: 130px">
           <template #body="{ data }">
             <span
-              :class="['font-semibold', novoPrecoLots.has(data.lot_id) ? 'text-green-600 animate-pulse' : 'text-slate-800']"
+              :class="['font-semibold', novoPrecoLots.has(data.lot_id) ? 'text-green-600 animate-pulse' : wsLots.has(data.lot_id) ? 'text-green-600' : 'text-slate-800']"
             >
               {{ data.bid_amount != null ? `${data.bid_amount.toLocaleString('pt-PT')} €` : '-' }}
             </span>
@@ -117,14 +117,17 @@ const veiculos = ref([])
 const loading = ref(true)
 const filtro  = ref('')
 const novoPrecoLots = ref(new Set())
+const wsLots = ref(new Set())
 
 onMounted(async () => {
-  const [resL, resV] = await Promise.all([
+  const [resL, resV, resWs] = await Promise.all([
     fetch(`/api/leiloes/${route.params.id}`),
     fetch(`/api/leiloes/${route.params.id}/veiculos`),
+    fetch(`/api/leiloes/${route.params.id}/ws_lots`),
   ])
   leilao.value  = await resL.json()
   veiculos.value = await resV.json()
+  wsLots.value = new Set(await resWs.json())
   loading.value = false
 })
 
@@ -133,6 +136,7 @@ useSse((evento) => {
   const v = veiculos.value.find(v => v.lot_id === evento.lot_id)
   if (v) {
     v.bid_amount = evento.valor
+    wsLots.value.add(evento.lot_id)
     novoPrecoLots.value.add(evento.lot_id)
     setTimeout(() => novoPrecoLots.value.delete(evento.lot_id), 3000)
   }

@@ -11,7 +11,7 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -26,6 +26,21 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB  = os.getenv("MONGO_DB", "ayvens")
 
 db = get_db(MONGO_URI, MONGO_DB)
+
+# ---------------------------------------------------------------------------
+# Fila de eventos SSE — uma Queue por cliente ligado
+# ---------------------------------------------------------------------------
+
+_sse_clients: list[asyncio.Queue] = []
+
+
+def _broadcast(evento: dict) -> None:
+    """Envia um evento para todos os clientes SSE ligados."""
+    for q in _sse_clients:
+        try:
+            q.put_nowait(evento)
+        except asyncio.QueueFull:
+            pass
 
 
 @asynccontextmanager
@@ -85,6 +100,13 @@ def get_veiculos(sale_id: str):
     return veiculos
 
 
+@app.get("/api/leiloes/{sale_id}/ws_lots")
+def get_ws_lots(sale_id: str):
+    """Retorna os lot_ids que têm pelo menos um bid WS neste leilão."""
+    lots = db.licitacoes_websocket_signalr.distinct("lot_id", {"sale_id": sale_id})
+    return lots
+
+
 @app.get("/api/veiculos/{lot_id}")
 def get_veiculo(lot_id: str):
     """Retorna um veículo pelo lot_id."""
@@ -125,9 +147,19 @@ def pesquisa(matricula: str = "", lot_id: str = ""):
             "historico": historico,
         })
 
-    # Ordenar por data de início do leilão (mais recente primeiro)
     resultado.sort(key=lambda x: x["leilao"].get("data_inicio", "") if x["leilao"] else "", reverse=True)
     return resultado
+
+
+@app.get("/api/veiculos/{lot_id}/ws_bids")
+def get_ws_bids(lot_id: str):
+    """Retorna as licitações recebidas via WebSocket SignalR (coleção temporária de validação)."""
+    bids = list(
+        db.licitacoes_websocket_signalr
+        .find({"lot_id": lot_id}, {"_id": 0})
+        .sort("timestamp_ayvens", 1)
+    )
+    return bids
 
 
 @app.get("/api/veiculos/{lot_id}/historico")
@@ -141,45 +173,48 @@ def get_historico(lot_id: str):
 
 
 # ---------------------------------------------------------------------------
-# SSE — eventos em tempo real
+# Endpoint interno — recebe notificação do main.py e faz broadcast SSE
+# ---------------------------------------------------------------------------
+
+@app.post("/api/interno/novo_preco")
+async def notify_novo_preco(request: Request):
+    """
+    Recebe um evento de novo preço do main.py e distribui por todos
+    os clientes SSE ligados. Apenas acessível localmente.
+    """
+    client_host = request.client.host
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    evento = await request.json()
+    _broadcast(evento)
+    logger.info("SSE broadcast — lot: %s | %.0f€ (%d clientes)",
+                evento.get("lot_id"), evento.get("valor", 0), len(_sse_clients))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SSE — stream de eventos em tempo real
 # ---------------------------------------------------------------------------
 
 @app.get("/api/events")
 async def sse_events():
-    """
-    Stream SSE. Emite um evento 'novo_preco' sempre que
-    um novo registo é inserido em historico_precos.
-    """
+    """Stream SSE. Emite eventos 'novo_preco' em tempo real."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _sse_clients.append(queue)
+    logger.info("SSE cliente ligado — total: %d", len(_sse_clients))
+
     async def generator():
-        # Keep-alive inicial
-        yield {"event": "ping", "data": "connected"}
-
-        loop = asyncio.get_event_loop()
-
-        with db.historico_precos.watch([
-            {"$match": {"operationType": "insert"}}
-        ]) as stream:
+        try:
+            yield {"event": "ping", "data": "connected"}
             while True:
-                # Verificar novo evento sem bloquear o event loop
-                change = await loop.run_in_executor(None, _next_change, stream)
-                if change:
-                    doc = change["fullDocument"]
-                    doc.pop("_id", None)
-                    # Enriquecer com marca/matrícula
-                    veiculo = db.veiculos.find_one(
-                        {"lot_id": doc["lot_id"]},
-                        {"marca_modelo": 1, "matricula": 1, "sale_id": 1, "offers_count": 1, "is_sold": 1, "is_withdrawn": 1, "_id": 0},
-                    )
-                    if veiculo:
-                        doc.update(veiculo)
-                    yield {"event": "novo_preco", "data": json.dumps(doc, default=str)}
-                else:
-                    # Keep-alive a cada 15s
+                try:
+                    evento = await asyncio.wait_for(queue.get(), timeout=20)
+                    yield {"event": "novo_preco", "data": json.dumps(evento, default=str)}
+                except asyncio.TimeoutError:
                     yield {"event": "ping", "data": "alive"}
+        finally:
+            _sse_clients.remove(queue)
+            logger.info("SSE cliente desligado — total: %d", len(_sse_clients))
 
     return EventSourceResponse(generator())
-
-
-def _next_change(stream, timeout_ms: int = 15000):
-    """Aguarda o próximo change stream event com timeout."""
-    return stream.try_next() or stream.next_after_timeout(timeout_ms)

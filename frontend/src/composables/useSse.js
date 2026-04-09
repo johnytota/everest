@@ -3,7 +3,7 @@ import { onMounted, onUnmounted } from 'vue'
 export function useSse(onNovoPreco) {
   let es = null
 
-  onMounted(() => {
+  function connect() {
     es = new EventSource('/api/events')
 
     es.addEventListener('novo_preco', (e) => {
@@ -11,13 +11,12 @@ export function useSse(onNovoPreco) {
     })
 
     es.onerror = () => {
-      // Reconectar automaticamente após 5s
-      setTimeout(() => {
-        es.close()
-        es = new EventSource('/api/events')
-      }, 5000)
+      es.close()
+      setTimeout(connect, 5000)
     }
-  })
+  }
+
+  onMounted(connect)
 
   onUnmounted(() => {
     es?.close()

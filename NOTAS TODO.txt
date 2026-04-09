@@ -1,10 +1,12 @@
 verificar se temos nalgum lado o preço inicial que a viatura inicia o leilao para os casos que o scraper regista a viatura e a mesma já tem licitaçoes (licitaçoes muito cedo ou o scrapper esteve crashado varias horas)
 Verificar se quando o leilao acaba há registo de preço de fecho ou ultimo preço. verificar também como o preço é atualizado quando há licitações, vem novo pedido html com todas as viaturas ou os preços são atualizados via webhook?
 
-verificar se funciona para 2 ou 3 leiloes
-escutar o webscocket signal R
-fix no login para nao ter de copiar cookie
+verificar se funciona para 2 ou 3 leiloes - so funciona para 1
 
+Possivel alteração do SSE para atualizar historico de preços de queue de alteração para mongo change streams onde a bd notifica o backend que uma tabela foi atualizada e depois o backend manda para o componente vue reativo mas a
+ BD tem de estar em replica set que não está, está em stanalone, quando fizer deploy podemos criar o docker replicaset e alterar o SSE para mongo change streams
+
+VIATURAS TERMINADAS
 
 ====================================================
         REPORTING and DATA ANALYSIS
@@ -15,7 +17,6 @@ Analisar compras e notificar:
 -se saiu mais barato ou mais caro em todas as plataformas 
 
 Analisar licitações e notificar se saiu algum carro igual ao licitado, se está mais barato e se saiu mais barato ou mais caro
-
 Carro em leilão mais barato que a média dos últimos 3 meses
-
 Carro saiu mais barato que a média dos últimos 3 meses
+Analisar quantos carros foram licitados num leilão e quantos foram vendidos(tentar descobrir se são marcados de alguma forma no fim do leilao) tentar perceber carros mais licitados, e nivel de procura por leilao  

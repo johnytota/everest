@@ -13,20 +13,24 @@ Ciclo de execução:
 import logging
 import os
 import random
+import threading
 import time
 from datetime import datetime
 
 from dotenv import load_dotenv
 
-from auth import get_authenticated_session
+from auth import get_authenticated_session, renew_session, session_expiration_ts
 from database import (
     get_db,
+    registar_licitacao_ws,
+    registar_preco,
     registar_precos_bulk,
     setup_indexes,
     upsert_leiloes,
     upsert_veiculos,
 )
 from scraper import get_leiloes_pt, get_veiculos_leilao
+import signalr_listener
 
 # ---------------------------------------------------------------------------
 # Configuração de logging
@@ -51,8 +55,8 @@ MONGO_URI   = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB    = os.getenv("MONGO_DB", "ayvens")
 
 # Intervalo de polling em segundos (com variação aleatória para não ser detetado)
-POLL_INTERVAL_MIN = 25
-POLL_INTERVAL_MAX = 40
+POLL_INTERVAL_MIN = 120
+POLL_INTERVAL_MAX = 240
 
 
 def run_cycle(session, db) -> None:
@@ -98,6 +102,94 @@ def run_cycle(session, db) -> None:
     logger.info("Ciclo concluído.")
 
 
+def start_session_renewal_thread(session, stop_event: threading.Event) -> threading.Thread:
+    """
+    Thread que dorme até 10 minutos antes da sessão expirar, renova, e repete.
+    """
+    MARGIN = 10 * 60  # acordar 10 minutos antes de expirar
+
+    def run():
+        while not stop_event.is_set():
+            try:
+                ts = session_expiration_ts(session)
+                if ts is None:
+                    logger.warning("Renovação sessão — sem timestamp de expiração, a tentar em 5 minutos.")
+                    stop_event.wait(300)
+                    continue
+
+                sleep_seconds = max(0, (ts - time.time()) - MARGIN)
+                from datetime import datetime, timezone
+                renew_at = datetime.fromtimestamp(ts - MARGIN).strftime("%H:%M:%S")
+                logger.info("Sessão expira em %.0f minutos — renovação agendada para as %s.", (ts - time.time()) / 60, renew_at)
+
+                # Dormir até 10 minutos antes de expirar (ou acordar se stop_event for ativado)
+                stop_event.wait(sleep_seconds)
+                if stop_event.is_set():
+                    break
+
+                logger.info("Sessão perto de expirar — a renovar...")
+                ok = renew_session(session, USERNAME, PASSWORD)
+                if not ok:
+                    logger.error("Falha ao renovar sessão — nova tentativa em 2 minutos.")
+                    stop_event.wait(120)
+
+            except Exception as e:
+                logger.error("Erro na thread de renovação: %s", e)
+                stop_event.wait(60)
+
+    t = threading.Thread(target=run, name="session-renewal", daemon=True)
+    t.start()
+    logger.info("Thread de renovação de sessão iniciada.")
+    return t
+
+
+def start_signalr_thread(session, db) -> threading.Thread:
+    """Lança o listener SignalR numa thread de background."""
+    stop_event = threading.Event()
+
+    def on_bid(lot_id: str, sale_id: str, highest_bid: float, timestamp_utc: str):
+        try:
+            registar_licitacao_ws(db, lot_id, sale_id, highest_bid, timestamp_utc)
+            # Atualizar bid_amount na coleção veiculos
+            db.veiculos.update_one(
+                {"lot_id": lot_id},
+                {"$set": {"bid_amount": highest_bid}},
+            )
+            # Registar no histórico e notificar SSE (se preço mudou)
+            veiculo = db.veiculos.find_one({"lot_id": lot_id}, {"marca_modelo": 1, "matricula": 1})
+            marca_modelo = veiculo.get("marca_modelo", "") if veiculo else ""
+            matricula = veiculo.get("matricula", "") if veiculo else ""
+            registar_preco(db, lot_id, highest_bid, marca_modelo, matricula, has_offer=True)
+        except Exception as e:
+            logger.error("Erro ao registar licitação WS: %s", e)
+
+    def get_sale_ids() -> list[str]:
+        leiloes = db.leiloes.find({"estado": 3}, {"sale_id": 1, "_id": 0})
+        return [str(l["sale_id"]) for l in leiloes]
+
+    def get_closing_date():
+        # Devolve o closing_date mais próximo entre os leilões activos
+        from datetime import timezone
+        leiloes = list(db.leiloes.find({"estado": 3}, {"closing_date": 1, "_id": 0}))
+        datas = []
+        for l in leiloes:
+            raw = l.get("closing_date", "")
+            if raw:
+                try:
+                    datas.append(datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc))
+                except (ValueError, AttributeError):
+                    pass
+        return min(datas) if datas else None
+
+    def run():
+        signalr_listener.listen(session, on_bid, stop_event, get_sale_ids, get_closing_date)
+
+    t = threading.Thread(target=run, name="signalr-listener", daemon=True)
+    t.start()
+    logger.info("Thread SignalR iniciada.")
+    return t
+
+
 def main():
     if not USERNAME or not PASSWORD:
         logger.error("Credenciais não configuradas. Define AYVENS_USERNAME e AYVENS_PASSWORD no .env")
@@ -116,7 +208,14 @@ def main():
 
     logger.info("Autenticado com sucesso. A iniciar scraping...")
 
-    # Loop principal
+    # Thread de renovação automática de sessão
+    stop_event = threading.Event()
+    start_session_renewal_thread(session, stop_event)
+
+    # Iniciar listener SignalR em paralelo (fase de validação)
+    start_signalr_thread(session, db)
+
+    # Loop principal (polling mantido para comparação)
     while True:
         try:
             run_cycle(session, db)

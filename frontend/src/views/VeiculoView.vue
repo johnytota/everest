@@ -30,12 +30,17 @@
           </a>
         </div>
         <div v-if="leilaoAberto" class="text-right shrink-0">
+          <div class="text-xs text-slate-400 mb-3">
+            Base de licitação
+            <span class="ml-1 font-semibold text-slate-600 text-sm">
+              {{ baseLicitacao != null ? `${baseLicitacao.toLocaleString('pt-PT')} €` : '-' }}
+            </span>
+          </div>
           <div :class="['text-3xl font-bold', precoAtualizado ? 'text-green-600' : 'text-slate-800']">
             {{ ultimoPreco != null ? `${ultimoPreco.toLocaleString('pt-PT')} €` : '-' }}
           </div>
-          <p class="text-xs text-slate-400 mt-0.5 mb-2">Valor atual</p>
+          <p class="text-xs text-slate-400 mt-0.5 mb-2">Oferta atual</p>
           <div class="flex justify-end gap-2">
-            <Tag :value="`${veiculo.offers_count} ofertas`" severity="secondary" />
             <Tag v-if="veiculo.is_sold" value="Vendido" severity="danger" />
             <Tag v-if="veiculo.is_withdrawn" value="Retirado" severity="warn" />
           </div>
@@ -56,7 +61,7 @@
         </div>
       </div>
 
-      <!-- Detalhes + Histórico atual -->
+      <!-- Detalhes + Histórico leilão atual -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
 
         <Card>
@@ -78,25 +83,48 @@
             <router-link v-if="leilaoAberto" :to="`/leiloes/${veiculo.sale_id}`" class="text-blue-600 hover:underline">
               Histórico de Preços — Leilão Atual
             </router-link>
-            <span v-else>Leilão Atual</span>
+            <span v-else class="text-slate-500">Sem leilão ativo</span>
           </template>
           <template #content>
-            <Message v-if="!leilaoAberto" severity="warn">
+            <div v-if="!leilaoAberto" class="text-slate-400 text-sm py-2">
               Não existem leilões ativos para esta viatura.
-            </Message>
-            <div v-else-if="historico.length === 0" class="text-slate-400 text-sm py-2">
-              Sem registos de preço.
             </div>
-            <div v-else class="space-y-0 max-h-72 overflow-y-auto">
-              <div
-                v-for="(h, i) in historicoInvertido"
-                :key="i"
-                class="flex items-center justify-between py-2 border-b border-slate-100 last:border-0"
-              >
-                <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
-                <span class="font-semibold text-sm" :class="i === 0 ? 'text-green-600' : 'text-slate-700'">
-                  {{ h.valor.toLocaleString('pt-PT') }} €
-                </span>
+            <div v-else>
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">Polling</p>
+                  <div v-if="historico.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
+                  <div v-else class="space-y-0 max-h-64 overflow-y-auto pr-2">
+                    <div
+                      v-for="(h, i) in historicoInvertido"
+                      :key="i"
+                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                    >
+                      <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
+                      <span class="font-semibold" :class="i === 0 ? 'text-green-600' : 'text-slate-700'">
+                        {{ h.valor.toLocaleString('pt-PT') }} €
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">
+                    <i class="pi pi-bolt text-yellow-500 text-xs mr-1" />WebSocket
+                  </p>
+                  <div v-if="wsBids.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
+                  <div v-else class="space-y-0 max-h-64 overflow-y-auto pr-2">
+                    <div
+                      v-for="(b, i) in [...wsBids].reverse()"
+                      :key="i"
+                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                    >
+                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens) }}</span>
+                      <span class="font-semibold" :class="i === 0 ? 'text-yellow-600' : 'text-slate-700'">
+                        {{ b.valor.toLocaleString('pt-PT') }} €
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -112,13 +140,10 @@
             <template #title>
               <div class="flex items-start justify-between gap-4">
                 <div>
-                  <router-link
-                    :to="`/leiloes/${r.veiculo.sale_id}`"
-                    class="text-blue-600 hover:underline text-base font-medium"
-                  >
+                  <router-link :to="`/leiloes/${r.veiculo.sale_id}`" class="text-blue-600 hover:underline text-base font-medium">
                     {{ r.leilao?.nome || r.veiculo.sale_id }}
                   </router-link>
-                  <p v-if="r.leilao?.descricao" class="text-xs font-semibold  uppercase tracking-wide mb-1">
+                  <p v-if="r.leilao?.descricao" class="text-xs font-semibold uppercase tracking-wide mb-1">
                     {{ r.leilao.descricao }}
                   </p>
                 </div>
@@ -145,23 +170,40 @@
                   </strong>
                 </span>
               </div>
-
-              <div v-if="r.historico.length > 0">
-                <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">Histórico de Preços</p>
-                <div class="space-y-0 max-h-48 overflow-y-auto">
-                  <div
-                    v-for="(h, i) in [...r.historico].reverse()"
-                    :key="i"
-                    class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
-                  >
-                    <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
-                    <span class="font-semibold" :class="i === 0 ? 'text-green-600' : 'text-slate-600'">
-                      {{ h.valor.toLocaleString('pt-PT') }} €
-                    </span>
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">Histórico de Preços (Polling)</p>
+                  <div v-if="r.historico.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
+                  <div v-else class="space-y-0 max-h-48 overflow-y-auto pr-2">
+                    <div
+                      v-for="(h, i) in [...r.historico].reverse()"
+                      :key="i"
+                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                    >
+                      <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
+                      <span class="font-semibold" :class="i === 0 ? 'text-green-600' : 'text-slate-600'">
+                        {{ h.valor.toLocaleString('pt-PT') }} €
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">Histórico de Preços (WebSocket)</p>
+                  <div v-if="r.wsBids.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
+                  <div v-else class="space-y-0 max-h-48 overflow-y-auto pr-2">
+                    <div
+                      v-for="(b, i) in [...r.wsBids].reverse()"
+                      :key="i"
+                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                    >
+                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens) }}</span>
+                      <span class="font-semibold" :class="i === 0 ? 'text-yellow-600' : 'text-slate-600'">
+                        {{ b.valor.toLocaleString('pt-PT') }} €
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div v-else class="text-slate-400 text-sm">Sem histórico de preços registado.</div>
             </template>
           </Card>
         </div>
@@ -187,7 +229,6 @@ import { useRoute } from 'vue-router'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
 import Button from 'primevue/button'
-import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import { useSse } from '../composables/useSse'
 
@@ -196,6 +237,7 @@ const route = useRoute()
 const veiculo           = ref(null)
 const leilaoAtual       = ref(null)
 const historico         = ref([])
+const wsBids            = ref([])
 const leiloesAnteriores = ref([])
 const loading           = ref(true)
 const precoAtualizado   = ref(false)
@@ -207,7 +249,7 @@ onMounted(async () => {
     fetch(`/api/veiculos/${route.params.id}`),
     fetch(`/api/veiculos/${route.params.id}/historico`),
   ])
-  veiculo.value  = await resV.json()
+  veiculo.value   = await resV.json()
   historico.value = await resH.json()
 
   const resL = await fetch(`/api/leiloes/${veiculo.value.sale_id}`)
@@ -215,11 +257,27 @@ onMounted(async () => {
 
   loading.value = false
 
-  if (veiculo.value?.matricula) {
-    const res = await fetch(`/api/pesquisa?matricula=${encodeURIComponent(veiculo.value.matricula)}`)
-    const todos = await res.json()
-    leiloesAnteriores.value = todos.filter(r => r.veiculo.lot_id !== route.params.id)
-  }
+  const [resWs, resPesquisa] = await Promise.all([
+    fetch(`/api/veiculos/${route.params.id}/ws_bids`),
+    veiculo.value?.matricula
+      ? fetch(`/api/pesquisa?matricula=${encodeURIComponent(veiculo.value.matricula)}`)
+      : Promise.resolve({ json: () => [] }),
+  ])
+  wsBids.value = await resWs.json()
+  const todos = await resPesquisa.json()
+  // Se o leilão está encerrado, incluir a própria viatura nos anteriores
+  const anteriores = todos.filter(r =>
+    r.veiculo.lot_id !== route.params.id || leilaoAtual.value?.estado !== 3
+  )
+  await Promise.all(anteriores.map(async r => {
+    if (r.veiculo.lot_id === route.params.id) {
+      r.wsBids = wsBids.value
+    } else {
+      const res = await fetch(`/api/veiculos/${r.veiculo.lot_id}/ws_bids`)
+      r.wsBids = res.ok ? await res.json() : []
+    }
+  }))
+  leiloesAnteriores.value = anteriores
 })
 
 useSse((evento) => {
@@ -233,7 +291,11 @@ useSse((evento) => {
 })
 
 const historicoInvertido = computed(() => [...historico.value].reverse())
-const ultimoPreco = computed(() => historico.value.length ? historico.value[historico.value.length - 1].valor : null)
+const ultimoPreco   = computed(() => historico.value.length ? historico.value[historico.value.length - 1].valor : null)
+const baseLicitacao = computed(() => {
+  const base = historico.value.find(h => !h.has_offer)
+  return base ? base.valor : (historico.value.length ? historico.value[0].valor : null)
+})
 
 const detalhesCarro = computed(() => {
   if (!veiculo.value) return {}
