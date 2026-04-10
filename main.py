@@ -11,6 +11,7 @@ Ciclo de execução:
 """
 
 import logging
+import logging.handlers
 import os
 import random
 import threading
@@ -36,12 +37,61 @@ import signalr_listener
 # Configuração de logging
 # ---------------------------------------------------------------------------
 
+LOG_FORMAT  = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+LOG_FILE    = "everest.log"
+LOG_HOURS   = 72
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format=LOG_FORMAT,
+    datefmt=LOG_DATEFMT,
 )
+
+_file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+logging.getLogger().addHandler(_file_handler)
+
 logger = logging.getLogger("main")
+
+
+def _trim_log(path: str = LOG_FILE, hours: int = LOG_HOURS) -> None:
+    """Remove do ficheiro de log as linhas com mais de `hours` horas."""
+    if not os.path.exists(path):
+        return
+    cutoff = datetime.utcnow().timestamp() - hours * 3600
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        kept = []
+        for line in lines:
+            try:
+                ts = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+                if ts >= cutoff:
+                    kept.append(line)
+            except ValueError:
+                kept.append(line)  # linhas sem timestamp (stack traces)
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+        logger.info("Log trimmed — %d linhas removidas, %d mantidas.", len(lines) - len(kept), len(kept))
+    except Exception as e:
+        logger.warning("Erro ao fazer trim do log: %s", e)
+
+
+def _start_log_trim_thread() -> None:
+    """Thread que limpa o log todos os dias às 23:00."""
+    def run():
+        while True:
+            now = datetime.utcnow()
+            # Calcular segundos até às 23:00 de hoje (ou amanhã se já passou)
+            target = now.replace(hour=23, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = target.replace(day=target.day + 1)
+            sleep_secs = (target - now).total_seconds()
+            time.sleep(sleep_secs)
+            _trim_log()
+    t = threading.Thread(target=run, name="log-trim", daemon=True)
+    t.start()
 
 # ---------------------------------------------------------------------------
 # Configuração
@@ -194,6 +244,9 @@ def main():
     if not USERNAME or not PASSWORD:
         logger.error("Credenciais não configuradas. Define AYVENS_USERNAME e AYVENS_PASSWORD no .env")
         return
+
+    # Thread de limpeza do log (todos os dias às 23:00)
+    _start_log_trim_thread()
 
     # Ligação à BD
     db = get_db(MONGO_URI, MONGO_DB)

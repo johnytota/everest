@@ -98,10 +98,10 @@
                     <div
                       v-for="(h, i) in historicoInvertido"
                       :key="i"
-                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                      :class="['flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm', i === historicoInvertido.length - 1 ? 'opacity-40' : '']"
                     >
                       <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
-                      <span class="font-semibold" :class="i === 0 ? 'text-green-600' : 'text-slate-700'">
+                      <span class="font-semibold" :class="i === 0 && i !== historicoInvertido.length - 1 ? 'text-green-600' : 'text-slate-700'">
                         {{ h.valor.toLocaleString('pt-PT') }} €
                       </span>
                     </div>
@@ -178,10 +178,10 @@
                     <div
                       v-for="(h, i) in [...r.historico].reverse()"
                       :key="i"
-                      class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
+                      :class="['flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm', i === r.historico.length - 1 ? 'opacity-40' : '']"
                     >
                       <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
-                      <span class="font-semibold" :class="i === 0 ? 'text-green-600' : 'text-slate-600'">
+                      <span class="font-semibold" :class="i === 0 && i !== r.historico.length - 1 ? 'text-green-600' : 'text-slate-600'">
                         {{ h.valor.toLocaleString('pt-PT') }} €
                       </span>
                     </div>

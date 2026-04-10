@@ -127,16 +127,7 @@ def _login_playwright(username: str, password: str) -> dict | None:
 
             page.wait_for_timeout(2000)
 
-            # Screenshot para diagnóstico
-            page.screenshot(path="debug_homepage.png")
-            logger.info("Playwright — screenshot guardado em debug_homepage.png")
             logger.info("Playwright — URL atual: %s", page.url)
-
-            # Listar TODOS os links da página para diagnóstico
-            links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href + ' | ' + e.textContent.trim().substring(0,50))")
-            logger.info("Playwright — todos os links (%d): %s", len(links), links[:20])
-            login_links = [l for l in links if any(k in l.lower() for k in ["login", "signin", "entrar", "aceder", "conta", "account"])]
-            logger.info("Playwright — links de login encontrados: %s", login_links)
 
             # Tentar clicar no botão de login
             login_found = False
@@ -187,7 +178,6 @@ def _login_playwright(username: str, password: str) -> dict | None:
                 page.wait_for_timeout(1000)
             else:
                 logger.error("Login falhado — cookies de autenticação não recebidos após submissão.")
-                page.screenshot(path="debug_login_failed.png")
                 browser.close()
                 return None
 

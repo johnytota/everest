@@ -201,6 +201,7 @@ def listen(
                     msg_type = msg.get("type")
 
                     if msg_type == 6:
+                        logger.info("SignalR — ping recebido")
                         ws.send(json.dumps({"type": 6}) + RECORD_SEP)
 
                         # Activar verificação de estado se hora de fecho passou

@@ -132,9 +132,12 @@ def upsert_veiculos(db: Database, veiculos: list[Veiculo]) -> None:
         # Se bid_amount for None, não sobrescrever um valor já existente na BD
         if dinamico["bid_amount"] is None:
             dinamico.pop("bid_amount")
+            setOnInsert = {**estatico, "bid_amount": None}
+        else:
+            setOnInsert = estatico
         ops.append(UpdateOne(
             {"lot_id": v.lot_id},
-            {"$set": dinamico, "$setOnInsert": {**estatico, "bid_amount": v.bid_amount}},
+            {"$set": dinamico, "$setOnInsert": setOnInsert},
             upsert=True,
         ))
     result = db.veiculos.bulk_write(ops)
