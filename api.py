@@ -75,8 +75,26 @@ def _clean(doc: dict) -> dict:
 
 @app.get("/api/leiloes")
 def get_leiloes():
-    """Retorna todos os leilões conhecidos."""
+    """Retorna todos os leilões conhecidos com estatísticas de licitações."""
     leiloes = list(db.leiloes.find({}, {"_id": 0}))
+
+    # Total de veículos por sale_id
+    pipeline_total = [
+        {"$group": {"_id": "$sale_id", "total": {"$sum": 1}}}
+    ]
+    totais = {r["_id"]: r["total"] for r in db.veiculos.aggregate(pipeline_total)}
+
+    # Veículos com pelo menos um bid WS (mesma fonte que o verde na listagem interna)
+    pipeline_ws = [
+        {"$group": {"_id": {"sale_id": "$sale_id", "lot_id": "$lot_id"}}},
+        {"$group": {"_id": "$_id.sale_id", "com_ws": {"$sum": 1}}},
+    ]
+    ws_stats = {r["_id"]: r["com_ws"] for r in db.licitacoes_websocket_signalr.aggregate(pipeline_ws)}
+
+    for l in leiloes:
+        l["stats_total"]     = totais.get(l["sale_id"], 0)
+        l["stats_licitados"] = ws_stats.get(l["sale_id"], 0)
+
     return leiloes
 
 

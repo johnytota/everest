@@ -38,11 +38,16 @@
             </span>
           </div>
         </div>
-        <Tag
-          :value="leilao?.estado === 3 ? 'Aberto' : 'Encerrado'"
-          :severity="leilao?.estado === 3 ? 'success' : 'secondary'"
-          class="shrink-0 mt-1"
-        />
+        <div class="flex flex-col items-end gap-1.5 shrink-0 mt-1">
+          <Tag
+            :value="leilao?.estado === 3 ? 'Aberto' : 'Encerrado'"
+            :severity="leilao?.estado === 3 ? 'success' : 'secondary'"
+          />
+          <span v-if="veiculos.length > 0" class="text-xs text-slate-500">
+            <span class="font-semibold" :style="{ color: licitacaoColor(wsLots.size, veiculos.length) }">{{ wsLots.size }}</span>
+            <span class="text-slate-400">/{{ veiculos.length }} licitados</span>
+          </span>
+        </div>
       </div>
 
       <!-- Filtro -->
@@ -151,6 +156,16 @@ const veiculosFiltrados = computed(() => {
     v.numero_lote?.toString().includes(q)
   )
 })
+
+function licitacaoColor(licitados, total) {
+  if (!total) return '#94a3b8'
+  const ratio = licitados / total
+  if (ratio === 0)  return '#94a3b8'
+  if (ratio < 0.25) return '#fb923c'
+  if (ratio < 0.5)  return '#f97316'
+  if (ratio < 0.75) return '#ef4444'
+  return '#dc2626'
+}
 
 function abrirVeiculo({ data }) {
   router.push(`/veiculos/${data.lot_id}`)

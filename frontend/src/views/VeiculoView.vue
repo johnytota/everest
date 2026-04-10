@@ -224,7 +224,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
@@ -244,10 +244,17 @@ const precoAtualizado   = ref(false)
 
 const leilaoAberto = computed(() => leilaoAtual.value?.estado === 3)
 
-onMounted(async () => {
+async function carregar(id) {
+  loading.value           = true
+  veiculo.value           = null
+  leilaoAtual.value       = null
+  historico.value         = []
+  wsBids.value            = []
+  leiloesAnteriores.value = []
+
   const [resV, resH] = await Promise.all([
-    fetch(`/api/veiculos/${route.params.id}`),
-    fetch(`/api/veiculos/${route.params.id}/historico`),
+    fetch(`/api/veiculos/${id}`),
+    fetch(`/api/veiculos/${id}/historico`),
   ])
   veiculo.value   = await resV.json()
   historico.value = await resH.json()
@@ -258,19 +265,18 @@ onMounted(async () => {
   loading.value = false
 
   const [resWs, resPesquisa] = await Promise.all([
-    fetch(`/api/veiculos/${route.params.id}/ws_bids`),
+    fetch(`/api/veiculos/${id}/ws_bids`),
     veiculo.value?.matricula
       ? fetch(`/api/pesquisa?matricula=${encodeURIComponent(veiculo.value.matricula)}`)
       : Promise.resolve({ json: () => [] }),
   ])
   wsBids.value = await resWs.json()
   const todos = await resPesquisa.json()
-  // Se o leilão está encerrado, incluir a própria viatura nos anteriores
   const anteriores = todos.filter(r =>
-    r.veiculo.lot_id !== route.params.id || leilaoAtual.value?.estado !== 3
+    r.veiculo.lot_id !== id || leilaoAtual.value?.estado !== 3
   )
   await Promise.all(anteriores.map(async r => {
-    if (r.veiculo.lot_id === route.params.id) {
+    if (r.veiculo.lot_id === id) {
       r.wsBids = wsBids.value
     } else {
       const res = await fetch(`/api/veiculos/${r.veiculo.lot_id}/ws_bids`)
@@ -278,7 +284,10 @@ onMounted(async () => {
     }
   }))
   leiloesAnteriores.value = anteriores
-})
+}
+
+onMounted(() => carregar(route.params.id))
+watch(() => route.params.id, (id) => { if (id) carregar(id) })
 
 useSse((evento) => {
   if (evento.lot_id !== route.params.id) return

@@ -229,6 +229,13 @@ def listen(
                                 logger.info("SignalR — leilão(ões) %s encerrado(s). A fechar WS...", sale_ids)
                                 ws.close()
                                 break
+                            fechados = [sid for sid in sale_ids if sid not in activos]
+                            if fechados:
+                                logger.info("SignalR — leilão(ões) %s encerrado(s), outros ainda ativos — a recalcular closing_dt", fechados)
+                                sale_ids = [sid for sid in sale_ids if sid in activos]
+                                closing_dt = get_closing_date() if get_closing_date else None
+                                verificar_estado = False
+                                logger.info("SignalR — subscritos restantes: %s | novo closing_dt: %s", sale_ids, closing_dt)
 
                     elif msg.get("target") == "Notify" and msg_type in (1, "Invocation"):
                         for arg in msg.get("arguments", []):
