@@ -28,7 +28,8 @@ from database import (
     registar_precos_bulk,
     setup_indexes,
     upsert_leiloes,
-    upsert_veiculos,
+    upsert_veiculo,
+    upsert_participacoes_bulk,
 )
 from scraper import get_leiloes_pt, get_veiculos_leilao
 import signalr_listener
@@ -136,15 +137,19 @@ def run_cycle(session, db) -> None:
     for leilao in leiloes:
         logger.info("A processar leilão %s — %s", leilao.sale_id, leilao.nome)
 
-        veiculos = get_veiculos_leilao(session, leilao.sale_id)
-        if not veiculos:
+        pares = get_veiculos_leilao(session, leilao.sale_id)
+        if not pares:
             logger.warning("Leilão %s — sem veículos.", leilao.sale_id)
             continue
 
-        # Guardar/atualizar veículos
-        upsert_veiculos(db, veiculos)
+        # Upsert veículos (por matrícula) e participações (por lot_id)
+        pares_com_id = []
+        for veiculo, participacao in pares:
+            veiculo_id = upsert_veiculo(db, veiculo)
+            pares_com_id.append((veiculo_id, participacao))
 
-        registar_precos_bulk(db, veiculos)
+        upsert_participacoes_bulk(db, pares_com_id)
+        registar_precos_bulk(db, pares)
 
         # Pequena pausa entre leilões para não sobrecarregar
         time.sleep(random.uniform(1.5, 3.0))
@@ -200,18 +205,29 @@ def start_signalr_thread(session, db) -> threading.Thread:
     def on_bid(lot_id: str, sale_id: str, highest_bid: float, timestamp_utc: str):
         try:
             registar_licitacao_ws(db, lot_id, sale_id, highest_bid, timestamp_utc)
-            # Atualizar bid_amount na coleção veiculos
-            db.veiculos.update_one(
+            db.participacoes.update_one(
                 {"lot_id": lot_id},
                 {"$set": {"bid_amount": highest_bid}},
             )
-            # Registar no histórico e notificar SSE (se preço mudou)
-            veiculo = db.veiculos.find_one({"lot_id": lot_id}, {"marca_modelo": 1, "matricula": 1})
-            marca_modelo = veiculo.get("marca_modelo", "") if veiculo else ""
-            matricula = veiculo.get("matricula", "") if veiculo else ""
-            registar_preco(db, lot_id, highest_bid, marca_modelo, matricula, has_offer=True)
+            # Notificar SSE para o frontend atualizar em tempo real
+            part = db.participacoes.find_one({"lot_id": lot_id}, {"veiculo_id": 1, "sale_id": 1, "offers_count": 1, "is_sold": 1, "is_withdrawn": 1})
+            v = db.veiculos.find_one({"_id": part["veiculo_id"]}, {"marca_modelo": 1, "matricula": 1}) if part else None
+            from database import _notify_sse
+            from datetime import datetime, timezone
+            _notify_sse({
+                "lot_id":       lot_id,
+                "valor":        highest_bid,
+                "timestamp":    datetime.now(timezone.utc).isoformat(),
+                "marca_modelo": v.get("marca_modelo", "") if v else "",
+                "matricula":    v.get("matricula", "") if v else "",
+                "fonte":        "ws",
+                "sale_id":      part.get("sale_id") if part else None,
+                "offers_count": part.get("offers_count") if part else None,
+                "is_sold":      part.get("is_sold") if part else None,
+                "is_withdrawn": part.get("is_withdrawn") if part else None,
+            })
         except Exception as e:
-            logger.error("Erro ao registar licitação WS: %s", e)
+            logger.error("Erro ao registar licitacao WS: %s", e)
 
     def get_sale_ids() -> list[str]:
         leiloes = db.leiloes.find({"estado": 3}, {"sale_id": 1, "_id": 0})

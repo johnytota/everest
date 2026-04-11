@@ -78,6 +78,6 @@ async function pesquisar() {
   }
 
   matricula.value = ''
-  router.push(`/veiculos/${resultados[0].veiculo.lot_id}`)
+  router.push(`/veiculos/${resultados[0].veiculo.veiculo_id}`)
 }
 </script>

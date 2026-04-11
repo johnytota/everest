@@ -114,11 +114,11 @@
                   <div v-if="wsBids.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
                   <div v-else class="space-y-0 max-h-64 overflow-y-auto pr-2">
                     <div
-                      v-for="(b, i) in [...wsBids].reverse()"
+                      v-for="(b, i) in historicoWsInvertido"
                       :key="i"
                       class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
                     >
-                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens) }}</span>
+                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens || b.received_at) }}</span>
                       <span class="font-semibold" :class="i === 0 ? 'text-yellow-600' : 'text-slate-700'">
                         {{ b.valor.toLocaleString('pt-PT') }} €
                       </span>
@@ -164,6 +164,12 @@
                   Lote <strong class="text-slate-700">#{{ r.veiculo.numero_lote }}</strong>
                 </span>
                 <span class="text-slate-400">
+                  Base de licitação
+                  <strong class="text-slate-700">
+                    {{ r.veiculo.base_licitacao != null ? `${r.veiculo.base_licitacao.toLocaleString('pt-PT')} €` : '-' }}
+                  </strong>
+                </span>
+                <span class="text-slate-400">
                   Valor final
                   <strong class="text-slate-700">
                     {{ r.veiculo.bid_amount != null ? `${r.veiculo.bid_amount.toLocaleString('pt-PT')} €` : '-' }}
@@ -181,7 +187,7 @@
                       :class="['flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm', i === r.historico.length - 1 ? 'opacity-40' : '']"
                     >
                       <span class="text-slate-400 text-xs">{{ formatDate(h.timestamp) }}</span>
-                      <span class="font-semibold" :class="i === 0 && i !== r.historico.length - 1 ? 'text-green-600' : 'text-slate-600'">
+                      <span class="font-semibold" :class="i === 0 && i !== r.historico.length - 1 ? 'text-slate-700' : 'text-slate-600'">
                         {{ h.valor.toLocaleString('pt-PT') }} €
                       </span>
                     </div>
@@ -189,14 +195,14 @@
                 </div>
                 <div>
                   <p class="text-xs text-slate-700 uppercase font-medium tracking-wide mb-2">Histórico de Preços (WebSocket)</p>
-                  <div v-if="r.wsBids.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
+                  <div v-if="!r.wsBids || r.wsBids.length === 0" class="text-slate-400 text-sm">Sem registos.</div>
                   <div v-else class="space-y-0 max-h-48 overflow-y-auto pr-2">
                     <div
                       v-for="(b, i) in [...r.wsBids].reverse()"
                       :key="i"
                       class="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0 text-sm"
                     >
-                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens) }}</span>
+                      <span class="text-slate-400 text-xs">{{ formatDate(b.timestamp_ayvens || b.timestamp) }}</span>
                       <span class="font-semibold" :class="i === 0 ? 'text-yellow-600' : 'text-slate-600'">
                         {{ b.valor.toLocaleString('pt-PT') }} €
                       </span>
@@ -236,11 +242,12 @@ const route = useRoute()
 
 const veiculo           = ref(null)
 const leilaoAtual       = ref(null)
-const historico         = ref([])
-const wsBids            = ref([])
+const historico         = ref([])   // apenas polling
+const wsBids            = ref([])   // apenas WS (licitacoes_websocket_signalr)
 const leiloesAnteriores = ref([])
 const loading           = ref(true)
 const precoAtualizado   = ref(false)
+const lotIdAtivo        = ref(null)
 
 const leilaoAberto = computed(() => leilaoAtual.value?.estado === 3)
 
@@ -251,37 +258,34 @@ async function carregar(id) {
   historico.value         = []
   wsBids.value            = []
   leiloesAnteriores.value = []
+  lotIdAtivo.value        = null
 
-  const [resV, resH] = await Promise.all([
-    fetch(`/api/veiculos/${id}`),
-    fetch(`/api/veiculos/${id}/historico`),
+  const resV = await fetch(`/api/veiculos/id/${id}`)
+  veiculo.value    = await resV.json()
+  lotIdAtivo.value = veiculo.value.lot_id
+
+  const [resH, resL, resWs] = await Promise.all([
+    fetch(`/api/veiculos/${lotIdAtivo.value}/historico`),
+    fetch(`/api/leiloes/${veiculo.value.sale_id}`),
+    fetch(`/api/veiculos/${lotIdAtivo.value}/ws_bids`),
   ])
-  veiculo.value   = await resV.json()
-  historico.value = await resH.json()
-
-  const resL = await fetch(`/api/leiloes/${veiculo.value.sale_id}`)
+  historico.value   = await resH.json()
   leilaoAtual.value = await resL.json()
+  wsBids.value      = await resWs.json()
 
   loading.value = false
 
-  const [resWs, resPesquisa] = await Promise.all([
-    fetch(`/api/veiculos/${id}/ws_bids`),
-    veiculo.value?.matricula
-      ? fetch(`/api/pesquisa?matricula=${encodeURIComponent(veiculo.value.matricula)}`)
-      : Promise.resolve({ json: () => [] }),
-  ])
-  wsBids.value = await resWs.json()
-  const todos = await resPesquisa.json()
+  const resPesquisa = veiculo.value?.matricula
+    ? fetch(`/api/pesquisa?matricula=${encodeURIComponent(veiculo.value.matricula)}`)
+    : Promise.resolve({ json: () => [] })
+  const todos = await (await resPesquisa).json()
+  // Para cada leilão anterior buscar também os ws_bids
   const anteriores = todos.filter(r =>
-    r.veiculo.lot_id !== id || leilaoAtual.value?.estado !== 3
+    r.veiculo.lot_id !== lotIdAtivo.value || leilaoAtual.value?.estado !== 3
   )
   await Promise.all(anteriores.map(async r => {
-    if (r.veiculo.lot_id === id) {
-      r.wsBids = wsBids.value
-    } else {
-      const res = await fetch(`/api/veiculos/${r.veiculo.lot_id}/ws_bids`)
-      r.wsBids = res.ok ? await res.json() : []
-    }
+    const res = await fetch(`/api/veiculos/${r.veiculo.lot_id}/ws_bids`)
+    r.wsBids = res.ok ? await res.json() : []
   }))
   leiloesAnteriores.value = anteriores
 }
@@ -290,8 +294,12 @@ onMounted(() => carregar(route.params.id))
 watch(() => route.params.id, (id) => { if (id) carregar(id) })
 
 useSse((evento) => {
-  if (evento.lot_id !== route.params.id) return
-  historico.value.push({ valor: evento.valor, timestamp: evento.timestamp })
+  if (evento.lot_id !== lotIdAtivo.value) return
+  if (evento.fonte === 'ws') {
+    wsBids.value.push({ valor: evento.valor, timestamp_ayvens: evento.timestamp, received_at: evento.timestamp })
+  } else {
+    historico.value.push({ valor: evento.valor, timestamp: evento.timestamp, fonte: 'polling', has_offer: true })
+  }
   if (evento.offers_count != null) veiculo.value.offers_count = evento.offers_count
   if (evento.is_sold != null)      veiculo.value.is_sold      = evento.is_sold
   if (evento.is_withdrawn != null) veiculo.value.is_withdrawn  = evento.is_withdrawn
@@ -299,8 +307,12 @@ useSse((evento) => {
   setTimeout(() => { precoAtualizado.value = false }, 3000)
 })
 
-const historicoInvertido = computed(() => [...historico.value].reverse())
-const ultimoPreco   = computed(() => historico.value.length ? historico.value[historico.value.length - 1].valor : null)
+const historicoInvertido   = computed(() => [...historico.value].reverse())
+const historicoWsInvertido = computed(() => [...wsBids.value].reverse())
+const ultimoPreco   = computed(() => {
+  const p = historico.value
+  return p.length ? p[p.length - 1].valor : null
+})
 const baseLicitacao = computed(() => {
   const base = historico.value.find(h => !h.has_offer)
   return base ? base.valor : (historico.value.length ? historico.value[0].valor : null)

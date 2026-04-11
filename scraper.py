@@ -52,9 +52,8 @@ class Leilao:
 
 @dataclass
 class Veiculo:
-    lot_id:        str
-    sale_id:       str
-    numero_lote:   str
+    """Identidade física do veículo — campos estáticos."""
+    lot_id:        str   # mantido para construir links externos Ayvens
     marca_modelo:  str
     versao:        str
     matricula:     str
@@ -65,28 +64,35 @@ class Veiculo:
     localizacao:   str
     fornecedor:    str
     chassis:       str
-    bid_amount:    float | None
-    offers_count:  int
-    is_sold:       bool
-    is_withdrawn:  bool
     imagem_url:    str
-    # Campos calculados a partir do badge HTML
-    base_licitacao: float | None = None  # Preço base inicial (badge-starting)
-    has_offer:      bool = False          # True se já houve pelo menos uma licitação
-    # Detalhes expandíveis
-    carrocaria:       str = ""
-    portas:           str = ""
-    lugares:          str = ""
-    categoria:        str = ""
-    cor_exterior:     str = ""
-    ano_construcao:   str = ""
-    potencia_cv:      str = ""
-    cilindrada:       str = ""
-    eurotax_venda:    str = ""
-    eurotax_compra:   str = ""
-    doc_manutencao:   str = ""
-    doc_peritagem:    str = ""
+    carrocaria:    str = ""
+    portas:        str = ""
+    lugares:       str = ""
+    categoria:     str = ""
+    cor_exterior:  str = ""
+    ano_construcao: str = ""
+    potencia_cv:   str = ""
+    cilindrada:    str = ""
+    eurotax_venda: str = ""
+    eurotax_compra: str = ""
+    doc_manutencao: str = ""
+    doc_peritagem:  str = ""
     scrape_ts:     datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class Participacao:
+    """Presença de um veículo num leilão específico — campos dinâmicos."""
+    lot_id:         str
+    sale_id:        str
+    numero_lote:    str
+    bid_amount:     float | None
+    offers_count:   int
+    is_sold:        bool
+    is_withdrawn:   bool
+    has_offer:      bool
+    base_licitacao: float | None = None
+    scrape_ts:      datetime = field(default_factory=datetime.utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +310,8 @@ def _parse_details(article) -> dict:
 GETLOTS_URL = f"{BASE_URL}/sale/getlots"
 
 
-def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
-    """Converte uma lista de article tags em objetos Veiculo."""
+def _parse_articles(articles, sale_id: str) -> list[tuple["Veiculo", "Participacao"]]:
+    """Converte uma lista de article tags em pares (Veiculo, Participacao)."""
     veiculos = []
     for article in articles:
         lot_id     = article.get("data-lotid", "")
@@ -354,10 +360,8 @@ def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
         specs   = _parse_specs(article)
         details = _parse_details(article)
 
-        veiculos.append(Veiculo(
+        veiculo = Veiculo(
             lot_id=lot_id,
-            sale_id=sale_ev_id,
-            numero_lote=numero,
             marca_modelo=marca_modelo,
             versao=versao or details["versao_det"],
             matricula=specs["matricula"],
@@ -368,13 +372,7 @@ def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
             localizacao=specs["localizacao"],
             fornecedor=specs["fornecedor"],
             chassis=details["chassis"] or specs["chassis"],
-            bid_amount=bid_amount,
-            offers_count=offers_count,
-            is_sold=is_sold,
-            is_withdrawn=is_withdrawn,
             imagem_url=imagem_url,
-            base_licitacao=base_licitacao,
-            has_offer=has_offer,
             carrocaria=details["carrocaria"],
             portas=details["portas"],
             lugares=details["lugares"],
@@ -387,11 +385,23 @@ def _parse_articles(articles, sale_id: str) -> list[Veiculo]:
             eurotax_compra=details["eurotax_compra"],
             doc_manutencao=details["doc_manutencao"],
             doc_peritagem=details["doc_peritagem"],
-        ))
+        )
+        participacao = Participacao(
+            lot_id=lot_id,
+            sale_id=sale_ev_id,
+            numero_lote=numero,
+            bid_amount=bid_amount,
+            offers_count=offers_count,
+            is_sold=is_sold,
+            is_withdrawn=is_withdrawn,
+            has_offer=has_offer,
+            base_licitacao=base_licitacao,
+        )
+        veiculos.append((veiculo, participacao))
     return veiculos
 
 
-def get_veiculos_leilao(session: requests.Session, sale_id: str) -> list[Veiculo]:
+def get_veiculos_leilao(session: requests.Session, sale_id: str) -> list[tuple[Veiculo, Participacao]]:
     """
     Extrai todos os veículos de um leilão, paginando via POST /sale/getlots.
     """
@@ -427,7 +437,7 @@ def get_veiculos_leilao(session: requests.Session, sale_id: str) -> list[Veiculo
     }
 
     while True:
-        excluded = [v.lot_id for v in veiculos]
+        excluded = [v.lot_id for v, _ in veiculos]
         payload = {
             "searchCriteria": {
                 "Makes": [], "Models": [], "TransmissionTypes": [],

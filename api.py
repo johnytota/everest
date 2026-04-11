@@ -78,14 +78,16 @@ def get_leiloes():
     """Retorna todos os leilões conhecidos com estatísticas de licitações."""
     leiloes = list(db.leiloes.find({}, {"_id": 0}))
 
-    # Total de veículos por sale_id
+    # Total de veículos por sale_id (via participacoes)
     pipeline_total = [
         {"$group": {"_id": "$sale_id", "total": {"$sum": 1}}}
     ]
-    totais = {r["_id"]: r["total"] for r in db.veiculos.aggregate(pipeline_total)}
+    totais = {r["_id"]: r["total"] for r in db.participacoes.aggregate(pipeline_total)}
 
-    # Veículos com pelo menos um bid WS (mesma fonte que o verde na listagem interna)
+    # Veículos com pelo menos um bid WS — apenas dos leilões conhecidos
+    sale_ids_conhecidos = [l["sale_id"] for l in leiloes]
     pipeline_ws = [
+        {"$match": {"sale_id": {"$in": sale_ids_conhecidos}}},
         {"$group": {"_id": {"sale_id": "$sale_id", "lot_id": "$lot_id"}}},
         {"$group": {"_id": "$_id.sale_id", "com_ws": {"$sum": 1}}},
     ]
@@ -113,25 +115,69 @@ def get_leilao(sale_id: str):
 
 @app.get("/api/leiloes/{sale_id}/veiculos")
 def get_veiculos(sale_id: str):
-    """Retorna todos os veículos de um leilão."""
-    veiculos = list(db.veiculos.find({"sale_id": sale_id}, {"_id": 0}))
-    return veiculos
+    """Retorna todos os veículos de um leilão (join participacoes + veiculos)."""
+    pipeline = [
+        {"$match": {"sale_id": sale_id}},
+        {"$lookup": {
+            "from": "veiculos",
+            "localField": "veiculo_id",
+            "foreignField": "_id",
+            "as": "v",
+        }},
+        {"$unwind": "$v"},
+        {"$replaceRoot": {"newRoot": {"$mergeObjects": ["$v", "$$ROOT"]}}},
+        {"$unset": ["v", "_id"]},
+    ]
+    return list(db.participacoes.aggregate(pipeline))
 
 
 @app.get("/api/leiloes/{sale_id}/ws_lots")
 def get_ws_lots(sale_id: str):
     """Retorna os lot_ids que têm pelo menos um bid WS neste leilão."""
-    lots = db.licitacoes_websocket_signalr.distinct("lot_id", {"sale_id": sale_id})
+    # Garantir que só devolvemos lot_ids que pertencem a este leilão
+    lot_ids_leilao = db.participacoes.distinct("lot_id", {"sale_id": sale_id})
+    lots = db.licitacoes_websocket_signalr.distinct("lot_id", {
+        "sale_id": sale_id,
+        "lot_id": {"$in": lot_ids_leilao},
+    })
     return lots
+
+
+@app.get("/api/veiculos/id/{veiculo_id}")
+def get_veiculo_by_id(veiculo_id: int):
+    """Retorna um veículo pelo veiculo_id (ID interno), com a participação ativa ou mais recente."""
+    # Preferir participação em leilão ativo (estado=3), senão a mais recente
+    leiloes_ativos = {l["sale_id"] for l in db.leiloes.find({"estado": 3}, {"sale_id": 1})}
+    participacoes = list(db.participacoes.find({"veiculo_id": veiculo_id}).sort("scrape_ts", -1))
+    if not participacoes:
+        raise HTTPException(status_code=404, detail="Veículo não encontrado")
+    part = next((p for p in participacoes if p.get("sale_id") in leiloes_ativos), participacoes[0])
+
+    veiculo = db.veiculos.find_one({"_id": veiculo_id}, {"_id": 0})
+    if not veiculo:
+        raise HTTPException(status_code=404, detail="Veículo não encontrado")
+    return {**veiculo, **{k: v for k, v in part.items() if k != "_id"}}
 
 
 @app.get("/api/veiculos/{lot_id}")
 def get_veiculo(lot_id: str):
-    """Retorna um veículo pelo lot_id."""
-    veiculo = db.veiculos.find_one({"lot_id": lot_id}, {"_id": 0})
-    if not veiculo:
+    """Retorna um veículo pelo lot_id (join participacao + veiculo)."""
+    pipeline = [
+        {"$match": {"lot_id": lot_id}},
+        {"$lookup": {
+            "from": "veiculos",
+            "localField": "veiculo_id",
+            "foreignField": "_id",
+            "as": "v",
+        }},
+        {"$unwind": "$v"},
+        {"$replaceRoot": {"newRoot": {"$mergeObjects": ["$v", "$$ROOT"]}}},
+        {"$unset": ["v", "_id"]},
+    ]
+    resultado = list(db.participacoes.aggregate(pipeline))
+    if not resultado:
         raise HTTPException(status_code=404, detail="Veículo não encontrado")
-    return veiculo
+    return resultado[0]
 
 
 @app.get("/api/pesquisa")
@@ -141,27 +187,35 @@ def pesquisa(matricula: str = "", lot_id: str = ""):
     Retorna todos os leilões em que esteve e o histórico de preços em cada um.
     """
     if lot_id:
-        veiculos = list(db.veiculos.find({"lot_id": lot_id}, {"_id": 0}))
+        part = db.participacoes.find_one({"lot_id": lot_id}, {"veiculo_id": 1})
+        if not part:
+            return []
+        veiculo_id = part["veiculo_id"]
     elif matricula:
-        veiculos = list(db.veiculos.find(
+        v = db.veiculos.find_one(
             {"matricula": {"$regex": f"^{matricula}$", "$options": "i"}},
-            {"_id": 0},
-        ))
+            {"_id": 1},
+        )
+        if not v:
+            return []
+        veiculo_id = v["_id"]
     else:
         return []
-    if not veiculos:
-        return []
+
+    # Todas as participações deste veículo
+    participacoes = list(db.participacoes.find({"veiculo_id": veiculo_id}, {"_id": 0}))
+    veiculo_doc = db.veiculos.find_one({"_id": veiculo_id}, {"_id": 0})
 
     resultado = []
-    for v in veiculos:
-        leilao = db.leiloes.find_one({"sale_id": v["sale_id"]}, {"_id": 0})
+    for p in participacoes:
+        leilao = db.leiloes.find_one({"sale_id": p["sale_id"]}, {"_id": 0})
         historico = list(
-            db.historico_precos.find({"lot_id": v["lot_id"]}, {"_id": 0})
+            db.historico_precos.find({"lot_id": p["lot_id"]}, {"_id": 0})
             .sort("timestamp", 1)
         )
         resultado.append({
-            "veiculo":  v,
-            "leilao":   leilao,
+            "veiculo":   {**veiculo_doc, **p},
+            "leilao":    leilao,
             "historico": historico,
         })
 

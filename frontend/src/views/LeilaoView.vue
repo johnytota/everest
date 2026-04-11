@@ -168,7 +168,7 @@ function licitacaoColor(licitados, total) {
 }
 
 function abrirVeiculo({ data }) {
-  router.push(`/veiculos/${data.lot_id}`)
+  router.push(`/veiculos/${data.veiculo_id}`)
 }
 
 function formatDate(iso) {

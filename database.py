@@ -11,7 +11,7 @@ from datetime import datetime
 from pymongo import MongoClient, UpdateOne
 from pymongo.database import Database
 
-from scraper import Leilao, Veiculo
+from scraper import Leilao, Veiculo, Participacao
 
 API_NOTIFY_URL = "http://127.0.0.1:8000/api/interno/novo_preco"
 
@@ -35,8 +35,13 @@ def get_db(mongo_uri: str = "mongodb://localhost:27017/", db_name: str = "ayvens
 def setup_indexes(db: Database) -> None:
     """Cria índices nas coleções para melhor performance."""
     db.leiloes.create_index("sale_id", unique=True)
-    db.veiculos.create_index("lot_id", unique=True)
-    db.veiculos.create_index("sale_id")
+    # Nova estrutura
+    db.veiculos.create_index("matricula")
+    db.veiculos.create_index("chassis")
+    db.participacoes.create_index("lot_id", unique=True)
+    db.participacoes.create_index("sale_id")
+    db.participacoes.create_index("veiculo_id")
+    # Histórico — inalterado
     db.historico_precos.create_index([("lot_id", 1), ("timestamp", -1)])
     db.historico_precos.create_index("lot_id")
     db.licitacoes_websocket_signalr.create_index([("lot_id", 1), ("timestamp_ayvens", -1)])
@@ -109,10 +114,85 @@ def get_leiloes_ativos(db: Database) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Veículos
+# Veículos + Participações
 # ---------------------------------------------------------------------------
 
-CAMPOS_DINAMICOS = {"bid_amount", "offers_count", "is_sold", "is_withdrawn", "has_offer"}
+def _next_veiculo_id(db: Database) -> int:
+    """Devolve o próximo ID sequencial para um veículo (atómico)."""
+    doc = db.counters.find_one_and_update(
+        {"_id": "veiculos"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    return doc["seq"]
+
+
+def upsert_veiculo(db: Database, veiculo: Veiculo) -> int:
+    """
+    Insere ou atualiza um veículo físico.
+    Lookup por matrícula (ou chassis se matrícula vazia).
+    Devolve o veiculo_id (ID incremental nosso).
+    """
+    # Campos que podem ser atualizados em scrapes posteriores
+    campos_atualizaveis = {
+        "imagem_url", "eurotax_venda", "eurotax_compra",
+        "localizacao", "doc_manutencao", "doc_peritagem",
+        "km", "data_registo",
+    }
+
+    doc = asdict(veiculo)
+    doc.pop("scrape_ts")
+
+    # Lookup por matrícula, depois chassis como fallback
+    existente = None
+    if veiculo.matricula:
+        existente = db.veiculos.find_one({"matricula": veiculo.matricula}, {"_id": 1})
+    if not existente and veiculo.chassis:
+        existente = db.veiculos.find_one({"chassis": veiculo.chassis}, {"_id": 1})
+
+    if existente:
+        veiculo_id = existente["_id"]
+        atualizacao = {k: doc[k] for k in campos_atualizaveis if k in doc}
+        if atualizacao:
+            db.veiculos.update_one({"_id": veiculo_id}, {"$set": atualizacao})
+    else:
+        veiculo_id = _next_veiculo_id(db)
+        db.veiculos.insert_one({"_id": veiculo_id, **doc})
+        logger.info("Novo veículo #%d — %s (%s)", veiculo_id, veiculo.marca_modelo, veiculo.matricula)
+
+    return veiculo_id
+
+
+def upsert_participacoes_bulk(db: Database, pares: list[tuple[int, "Participacao"]]) -> None:
+    """Upsert em bulk de participações. Recebe lista de (veiculo_id, Participacao)."""
+    if not pares:
+        return
+    ops = []
+    for veiculo_id, p in pares:
+        doc = asdict(p)
+        doc.pop("scrape_ts")
+        # bid_amount e base_licitacao: não sobrescrever com None se já existe valor
+        bid  = doc.pop("bid_amount")
+        base = doc.pop("base_licitacao")
+        set_always = {k: v for k, v in doc.items() if k not in {"lot_id", "sale_id", "numero_lote"}}
+        if bid is not None:
+            set_always["bid_amount"] = bid
+        if base is not None:
+            set_always["base_licitacao"] = base
+        ops.append(UpdateOne(
+            {"lot_id": p.lot_id},
+            {
+                "$set": set_always,
+                "$setOnInsert": {"lot_id": p.lot_id, "sale_id": p.sale_id,
+                                 "numero_lote": p.numero_lote, "veiculo_id": veiculo_id,
+                                 **({"bid_amount": None} if bid is None else {}),
+                                 **({"base_licitacao": None} if base is None else {})},
+            },
+            upsert=True,
+        ))
+    result = db.participacoes.bulk_write(ops)
+    logger.info("Participacoes — upserted: %d, modified: %d", result.upserted_count, result.modified_count)
 
 
 def upsert_veiculos(db: Database, veiculos: list[Veiculo]) -> None:
@@ -198,7 +278,7 @@ def registar_preco(
     )
 
     # Notificar API para broadcast SSE
-    veiculo = db.veiculos.find_one(
+    part = db.participacoes.find_one(
         {"lot_id": lot_id},
         {"sale_id": 1, "offers_count": 1, "is_sold": 1, "is_withdrawn": 1, "_id": 0},
     )
@@ -208,31 +288,32 @@ def registar_preco(
         "timestamp":     ts.isoformat(),
         "marca_modelo":  marca_modelo,
         "matricula":     matricula,
+        "fonte":         "polling",
     }
-    if veiculo:
+    if part:
         evento.update({
-            "sale_id":       veiculo.get("sale_id"),
-            "offers_count":  veiculo.get("offers_count"),
-            "is_sold":       veiculo.get("is_sold"),
-            "is_withdrawn":  veiculo.get("is_withdrawn"),
+            "sale_id":       part.get("sale_id"),
+            "offers_count":  part.get("offers_count"),
+            "is_sold":       part.get("is_sold"),
+            "is_withdrawn":  part.get("is_withdrawn"),
         })
     _notify_sse(evento)
 
     return True
 
 
-def registar_precos_bulk(db: Database, veiculos: list[Veiculo]) -> int:
+def registar_precos_bulk(db: Database, pares: list[tuple[Veiculo, Participacao]]) -> int:
     """
     Regista o preço atual de cada veículo se tiver mudado.
     Retorna o número de novos registos inseridos.
     """
     novos = 0
-    for v in veiculos:
-        if v.bid_amount is None or v.is_withdrawn:
+    for veiculo, part in pares:
+        if part.bid_amount is None or part.is_withdrawn:
             continue
-        if registar_preco(db, v.lot_id, v.bid_amount, v.marca_modelo, v.matricula, v.has_offer):
+        if registar_preco(db, part.lot_id, part.bid_amount, veiculo.marca_modelo, veiculo.matricula, part.has_offer):
             novos += 1
-    logger.info("Preços registados neste ciclo: %d", novos)
+    logger.info("Precos registados neste ciclo: %d", novos)
     return novos
 
 
