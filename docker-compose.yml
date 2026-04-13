@@ -28,6 +28,7 @@ services:
     env_file: .env
     environment:
       MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+      TZ: Europe/Lisbon
     depends_on:
       - mongo
 

@@ -105,9 +105,39 @@ PASSWORD    = os.getenv("AYVENS_PASSWORD", "")
 MONGO_URI   = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB    = os.getenv("MONGO_DB", "ayvens")
 
-# Intervalo de polling em segundos (com variação aleatória para não ser detetado)
-POLL_INTERVAL_MIN = 120
-POLL_INTERVAL_MAX = 240
+# Blocos de horário — definidos no .env
+# Cada bloco: INICIO, FIM (hora inteira), MIN e MAX em segundos
+# MIN=MAX=0 significa parado nesse bloco
+BLOCOS = [
+    {
+        "inicio": int(os.getenv("BLOCO1_INICIO", 8)),
+        "fim":    int(os.getenv("BLOCO1_FIM",    14)),
+        "min":    int(os.getenv("BLOCO1_MIN",    3000)),
+        "max":    int(os.getenv("BLOCO1_MAX",    5400)),
+    },
+    {
+        "inicio": int(os.getenv("BLOCO2_INICIO", 14)),
+        "fim":    int(os.getenv("BLOCO2_FIM",    17)),
+        "min":    int(os.getenv("BLOCO2_MIN",    120)),
+        "max":    int(os.getenv("BLOCO2_MAX",    240)),
+    },
+    {
+        "inicio": int(os.getenv("BLOCO3_INICIO", 17)),
+        "fim":    int(os.getenv("BLOCO3_FIM",    23)),
+        "min":    int(os.getenv("BLOCO3_MIN",    3000)),
+        "max":    int(os.getenv("BLOCO3_MAX",    5400)),
+    },
+]
+
+
+def get_intervalo() -> float:
+    """Retorna o intervalo em segundos conforme o bloco horário actual."""
+    hora = datetime.now().hour
+    for b in BLOCOS:
+        if b["inicio"] <= hora < b["fim"]:
+            return random.uniform(b["min"], b["max"])
+    # Fora de todos os blocos — intervalo longo (não devia acontecer, o cron para o container)
+    return 3600
 
 
 def run_cycle(session, db) -> None:
@@ -297,8 +327,8 @@ def main():
                 logger.error("Não foi possível renovar sessão. A terminar.")
                 break
 
-        # Aguardar próximo ciclo com intervalo aleatório
-        intervalo = random.uniform(POLL_INTERVAL_MIN, POLL_INTERVAL_MAX)
+        # Aguardar próximo ciclo conforme bloco horário
+        intervalo = get_intervalo()
         logger.info("Próximo ciclo em %.0f segundos.", intervalo)
         time.sleep(intervalo)
 
