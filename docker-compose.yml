@@ -31,15 +31,5 @@ services:
     depends_on:
       - mongo
 
-  scraper_bca:
-    build: .
-    restart: unless-stopped
-    command: python main_bca.py
-    env_file: .env
-    environment:
-      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
-    depends_on:
-      - mongo
-
 volumes:
   mongo_data:
