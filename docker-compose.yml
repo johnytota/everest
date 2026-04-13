@@ -1,0 +1,45 @@
+services:
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 123
+    volumes:
+      - mongo_data:/data/db
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+    depends_on:
+      - mongo
+
+  scraper:
+    build: .
+    restart: unless-stopped
+    command: python main.py
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+    depends_on:
+      - mongo
+
+  scraper_bca:
+    build: .
+    restart: unless-stopped
+    command: python main_bca.py
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+    depends_on:
+      - mongo
+
+volumes:
+  mongo_data:
