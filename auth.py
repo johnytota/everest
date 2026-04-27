@@ -95,7 +95,7 @@ def _login_playwright(username: str, password: str) -> dict | None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
+            headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
