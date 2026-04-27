@@ -53,6 +53,7 @@
           v-if="veiculo.imagem_url"
           :src="veiculo.imagem_url"
           :alt="veiculo.marca_modelo"
+          referrerpolicy="no-referrer"
           class="object-cover"
         />
         <div v-else class="flex flex-col items-center gap-2 text-slate-400">
@@ -166,7 +167,7 @@
                 <span class="text-slate-400">
                   Base de licitação
                   <strong class="text-slate-700">
-                    {{ r.veiculo.base_licitacao != null ? `${r.veiculo.base_licitacao.toLocaleString('pt-PT')} €` : '-' }}
+                    {{ r.historico.length ? `${r.historico[0].valor.toLocaleString('pt-PT')} €` : '-' }}
                   </strong>
                 </span>
                 <span class="text-slate-400">

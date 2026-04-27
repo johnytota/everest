@@ -1,12 +1,23 @@
+o ficheiro everest.log não está a apagar as mensagens mais antigas
+ajustar horas de scrape, leilao iniciou às 18, só ia ser adicionado 5000 segundos mais tarde (websocket para isto ou ajustar scrap)
+
+horas do signal http://192.168.1.187/veiculos/750 Model 3 Standar · 99-ZZ-98 · #2022431 as 14;19 e no site aparece 13:19 mas no log do servidor esta ok 
+Em localhost entra em validação de estado de fecho precocemente.
+por vezes no main não carrega todas as paginas no +10, para algures a meio
+verificar porque nao está a cortar o ficheiro dos logs
+
 verificar se temos nalgum lado o preço inicial que a viatura inicia o leilao para os casos que o scraper regista a viatura e a mesma já tem licitaçoes (licitaçoes muito cedo ou o scrapper esteve crashado varias horas)
 Verificar se quando o leilao acaba há registo de preço de fecho ou ultimo preço. verificar também como o preço é atualizado quando há licitações, vem novo pedido html com todas as viaturas ou os preços são atualizados via webhook?
 
-verificar se funciona para 2 ou 3 leiloes - so funciona para 1
 
 Possivel alteração do SSE para atualizar historico de preços de queue de alteração para mongo change streams onde a bd notifica o backend que uma tabela foi atualizada e depois o backend manda para o componente vue reativo mas a
  BD tem de estar em replica set que não está, está em stanalone, quando fizer deploy podemos criar o docker replicaset e alterar o SSE para mongo change streams
 
 VIATURAS TERMINADAS
+
+Criar file de WARNING e email para mim:
+  -   quando hora de scrap é maior que a hora de inicio de leilao para despitar se está com intervalo grande e se há lieloes a ser criados fora da hora previsra
+  - hora de inicio e fim de scrap, avisar quando nao arranca e quando está parado ou nao enviou
 
 ====================================================
         REPORTING and DATA ANALYSIS
@@ -19,4 +30,4 @@ Analisar compras e notificar:
 Analisar licitações e notificar se saiu algum carro igual ao licitado, se está mais barato e se saiu mais barato ou mais caro
 Carro em leilão mais barato que a média dos últimos 3 meses
 Carro saiu mais barato que a média dos últimos 3 meses
-Analisar quantos carros foram licitados num leilão e quantos foram vendidos(tentar descobrir se são marcados de alguma forma no fim do leilao) tentar perceber carros mais licitados, e nivel de procura por leilao  
+Analisar quantos carros foram licitados num leilão e quantos foram vendidos(tentar descobrir se são marcados de alguma forma noe fim do leilao) tentar perceber carros mais licitados, e nivel de procura por leilao  

@@ -95,7 +95,7 @@ def _login_playwright(username: str, password: str) -> dict | None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -125,6 +125,18 @@ def _login_playwright(username: str, password: str) -> dict | None:
             except Exception:
                 logger.info("Playwright — banner de cookies não apareceu, a continuar...")
 
+            # Fechar popup promocional se aparecer
+            try:
+                page.wait_for_selector("button.ab_widget_container_popin-image_close_button", timeout=5000, state="visible")
+                close_btn = page.query_selector("button.ab_widget_container_popin-image_close_button")
+                if close_btn and close_btn.is_visible():
+                    logger.info("Playwright — a fechar popup promocional...")
+                    close_btn.click()
+                    page.wait_for_timeout(800)
+                    logger.info("Playwright — popup AB Tasty fechado.")
+            except Exception:
+                logger.info("Playwright — popup promocional não apareceu, a continuar...")
+
             page.wait_for_timeout(2000)
 
             logger.info("Playwright — URL atual: %s", page.url)
@@ -132,6 +144,8 @@ def _login_playwright(username: str, password: str) -> dict | None:
             # Tentar clicar no botão de login
             login_found = False
             for selector in [
+                "#BtnHeader_login",
+                "a#BtnHeader_login",
                 "#btn_signIn",
                 "button#btn_signIn",
                 "carmarket-button[buttonid='btn_signIn'] button",
@@ -155,15 +169,16 @@ def _login_playwright(username: str, password: str) -> dict | None:
 
             # Aguardar modal de login abrir
             logger.info("Playwright — a aguardar modal de login...")
-            page.wait_for_selector("#userName", state="visible", timeout=10000)
+            page.wait_for_timeout(1500)
+            page.wait_for_selector("input[name='userName']", state="visible", timeout=10000)
 
             # Preencher formulário do modal
             logger.info("Playwright — a preencher credenciais...")
-            page.fill("#userName", username)
-            page.fill("#password", password)
+            page.fill("input[name='userName']", username)
+            page.fill("input[name='password']", password)
 
-            # Submeter — procurar botão de submit dentro do modal
-            page.click("button[type='submit'], carmarket-button[buttonid*='login'] button, button:has-text('Entrar'), button:has-text('Login'):not(.secondary)")
+            # Submeter
+            page.click("button.signin-btn")
 
             # Aguardar fecho do modal ou navegação
             page.wait_for_load_state("networkidle", timeout=30000)

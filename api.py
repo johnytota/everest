@@ -60,16 +60,6 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _clean(doc: dict) -> dict:
-    """Remove _id do MongoDB para serialização JSON."""
-    doc.pop("_id", None)
-    return doc
-
-
-# ---------------------------------------------------------------------------
 # Leilões
 # ---------------------------------------------------------------------------
 
@@ -220,6 +210,220 @@ def pesquisa(matricula: str = "", lot_id: str = ""):
         })
 
     resultado.sort(key=lambda x: x["leilao"].get("data_inicio", "") if x["leilao"] else "", reverse=True)
+    return resultado
+
+
+@app.get("/api/pesquisa/sugestoes")
+def pesquisa_sugestoes(q: str = ""):
+    """Pesquisa veículos por marca/modelo (parcial, case-insensitive). Devolve até 20 resultados com estatísticas."""
+    if not q or len(q) < 2:
+        return []
+    docs = list(
+        db.veiculos.find(
+            {"marca_modelo": {"$regex": q, "$options": "i"}},
+            {"_id": 1, "marca_modelo": 1, "matricula": 1, "imagem_url": 1, "ano_construcao": 1, "km": 1, "combustivel": 1},
+        ).sort("_id", -1).limit(20)
+    )
+
+    resultado = []
+    for v in docs:
+        veiculo_id = v["_id"]
+
+        # Todas as participações deste veículo
+        participacoes = list(db.participacoes.find({"veiculo_id": veiculo_id}, {"lot_id": 1, "sale_id": 1, "_id": 0}))
+        num_leiloes = len(participacoes)
+        lot_ids = [p["lot_id"] for p in participacoes]
+
+        # Último leilão — o mais recente por data_inicio
+        num_bids      = 0
+        preco_inicial = None
+        preco_final   = None
+        if participacoes:
+            sale_ids = [p["sale_id"] for p in participacoes]
+            leiloes_v = list(db.leiloes.find({"sale_id": {"$in": sale_ids}}, {"sale_id": 1, "data_inicio": 1, "_id": 0}))
+            leiloes_v.sort(key=lambda l: l.get("data_inicio") or "", reverse=True)
+            if leiloes_v:
+                ultimo_sale_id = leiloes_v[0]["sale_id"]
+                ultimo_lot_id  = next((p["lot_id"] for p in participacoes if p["sale_id"] == ultimo_sale_id), None)
+                if ultimo_lot_id:
+                    num_bids = db.licitacoes_websocket_signalr.count_documents({"lot_id": ultimo_lot_id})
+                    historico = list(
+                        db.historico_precos.find({"lot_id": ultimo_lot_id}, {"valor": 1, "_id": 0}).sort("timestamp", 1)
+                    )
+                    if historico:
+                        preco_inicial = historico[0]["valor"]
+                        preco_final   = historico[-1]["valor"]
+
+        resultado.append({
+            "veiculo_id":     veiculo_id,
+            "marca_modelo":   v.get("marca_modelo", ""),
+            "matricula":      v.get("matricula", ""),
+            "imagem_url":     v.get("imagem_url", ""),
+            "ano_construcao": v.get("ano_construcao", ""),
+            "km":             v.get("km", ""),
+            "combustivel":    v.get("combustivel", ""),
+            "num_leiloes":    num_leiloes,
+            "num_bids":       num_bids,
+            "preco_inicial":  preco_inicial,
+            "preco_final":    preco_final,
+        })
+
+    return resultado
+
+
+@app.get("/api/analises/multi-leiloes")
+def analises_multi_leiloes():
+    """
+    Veículos em múltiplos leilões (2º, 3º, 4º, 5+) sem licitações no último leilão.
+    Retorna grupos separados para o dashboard.
+    """
+    # Contar participações por veículo
+    pipeline = [
+        {"$group": {"_id": "$veiculo_id", "num_leiloes": {"$sum": 1}}},
+        {"$match": {"num_leiloes": {"$gte": 2}}},
+    ]
+    contagens = {r["_id"]: r["num_leiloes"] for r in db.participacoes.aggregate(pipeline)}
+
+    veiculo_ids = list(contagens.keys())
+    veiculos_docs = {
+        v["_id"]: v
+        for v in db.veiculos.find(
+            {"_id": {"$in": veiculo_ids}},
+            {"_id": 1, "marca_modelo": 1, "matricula": 1, "imagem_url": 1, "ano_construcao": 1, "km": 1},
+        )
+    }
+
+    grupos = {2: [], 3: [], 4: [], 5: []}
+
+    for veiculo_id, num_leiloes in contagens.items():
+        v = veiculos_docs.get(veiculo_id)
+        if not v:
+            continue
+
+        # Descobrir o lot_id do último leilão
+        participacoes = list(db.participacoes.find({"veiculo_id": veiculo_id}, {"lot_id": 1, "sale_id": 1, "_id": 0}))
+        sale_ids = [p["sale_id"] for p in participacoes]
+        leiloes_v = list(db.leiloes.find({"sale_id": {"$in": sale_ids}}, {"sale_id": 1, "data_inicio": 1, "_id": 0}))
+        leiloes_v.sort(key=lambda l: l.get("data_inicio") or "", reverse=True)
+        if not leiloes_v:
+            continue
+        ultimo_sale_id = leiloes_v[0]["sale_id"]
+        ultimo_lot_id  = next((p["lot_id"] for p in participacoes if p["sale_id"] == ultimo_sale_id), None)
+        if not ultimo_lot_id:
+            continue
+
+        # Excluir se tiver licitações no último leilão
+        num_bids = db.licitacoes_websocket_signalr.count_documents({"lot_id": ultimo_lot_id})
+        if num_bids > 0:
+            continue
+
+        entry = {
+            "veiculo_id":     veiculo_id,
+            "marca_modelo":   v.get("marca_modelo", ""),
+            "matricula":      v.get("matricula", ""),
+            "imagem_url":     v.get("imagem_url", ""),
+            "ano_construcao": v.get("ano_construcao", ""),
+            "km":             v.get("km", ""),
+            "num_leiloes":    num_leiloes,
+        }
+
+        chave = num_leiloes if num_leiloes <= 4 else 5
+        grupos[chave].append(entry)
+
+    # Ordenar cada grupo por veiculo_id desc (mais recentes primeiro)
+    for g in grupos.values():
+        g.sort(key=lambda x: x["veiculo_id"], reverse=True)
+
+    return {
+        "segundo":  grupos[2],
+        "terceiro": grupos[3],
+        "quarto":   grupos[4],
+        "quinto_mais": grupos[5],
+    }
+
+
+@app.get("/api/analises/preco-descendente")
+def analises_preco_descendente():
+    """
+    Viaturas cujo preço inicial está a descer entre leilões consecutivos.
+    Compara o preço base do leilão mais recente com o anterior.
+    """
+    pipeline = [
+        {"$group": {"_id": "$veiculo_id", "num_leiloes": {"$sum": 1}}},
+        {"$match": {"num_leiloes": {"$gte": 2}}},
+    ]
+    veiculo_ids = [r["_id"] for r in db.participacoes.aggregate(pipeline)]
+
+    veiculos_docs = {
+        v["_id"]: v
+        for v in db.veiculos.find(
+            {"_id": {"$in": veiculo_ids}},
+            {"_id": 1, "marca_modelo": 1, "matricula": 1, "imagem_url": 1, "ano_construcao": 1, "km": 1},
+        )
+    }
+
+    resultado = []
+
+    for veiculo_id in veiculo_ids:
+        v = veiculos_docs.get(veiculo_id)
+        if not v:
+            continue
+
+        participacoes = list(db.participacoes.find({"veiculo_id": veiculo_id}, {"lot_id": 1, "sale_id": 1, "_id": 0}))
+        sale_ids = [p["sale_id"] for p in participacoes]
+        leiloes_v = list(db.leiloes.find({"sale_id": {"$in": sale_ids}}, {"sale_id": 1, "data_inicio": 1, "_id": 0}))
+        leiloes_v.sort(key=lambda l: l.get("data_inicio") or "")
+
+        if len(leiloes_v) < 2:
+            continue
+
+        # Obter preço inicial de cada leilão (ordenado do mais antigo para o mais recente)
+        precos = []
+        for leilao in leiloes_v:
+            lot_id = next((p["lot_id"] for p in participacoes if p["sale_id"] == leilao["sale_id"]), None)
+            if not lot_id:
+                continue
+            primeiro = db.historico_precos.find_one({"lot_id": lot_id}, {"valor": 1, "_id": 0}, sort=[("timestamp", 1)])
+            precos.append({"sale_id": leilao["sale_id"], "data_inicio": leilao.get("data_inicio"), "preco_base": primeiro["valor"] if primeiro else None})
+
+        precos = [p for p in precos if p["preco_base"] is not None]
+        if len(precos) < 2:
+            continue
+
+        # Verificar se existe algum par consecutivo com descida de preço
+        descida_max = 0
+        tem_descida = False
+        for i in range(len(precos) - 1, 0, -1):
+            diff = precos[i - 1]["preco_base"] - precos[i]["preco_base"]
+            if diff > 0:
+                tem_descida = True
+                descida_max = max(descida_max, diff)
+        if not tem_descida:
+            continue
+
+        # Filtrar: sem licitações no último leilão OU leilão ativo
+        ultimo_sale_id = precos[-1]["sale_id"]
+        ultimo_lot_id  = next((p["lot_id"] for p in participacoes if p["sale_id"] == ultimo_sale_id), None)
+        leilao_atual   = db.leiloes.find_one({"sale_id": ultimo_sale_id}, {"estado": 1, "_id": 0})
+        leilao_ativo   = leilao_atual and leilao_atual.get("estado") == 3
+        num_bids       = db.licitacoes_websocket_signalr.count_documents({"lot_id": ultimo_lot_id}) if ultimo_lot_id else 0
+        if num_bids > 0 and not leilao_ativo:
+            continue
+
+        resultado.append({
+            "veiculo_id":     veiculo_id,
+            "marca_modelo":   v.get("marca_modelo", ""),
+            "matricula":      v.get("matricula", ""),
+            "imagem_url":     v.get("imagem_url", ""),
+            "ano_construcao": v.get("ano_construcao", ""),
+            "km":             v.get("km", ""),
+            "num_leiloes":    len(precos),
+            "precos":         [p["preco_base"] for p in precos],
+            "descida":        descida_max,
+            "leilao_ativo":   leilao_ativo,
+        })
+
+    resultado.sort(key=lambda x: (0 if x["leilao_ativo"] else 1, -x["descida"]))
     return resultado
 
 

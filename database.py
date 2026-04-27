@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def get_db(mongo_uri: str = "mongodb://localhost:27017/", db_name: str = "ayvens") -> Database:
     """Retorna a ligação à base de dados MongoDB."""
-    client = MongoClient(mongo_uri)
+    client = MongoClient(mongo_uri, tz_aware=True)
     return client[db_name]
 
 
@@ -70,7 +70,7 @@ def registar_licitacao_ws(
         "sale_id":       sale_id,
         "valor":         highest_bid,
         "timestamp_ayvens": ts_ayvens,
-        "received_at":   datetime.utcnow(),
+        "received_at":   datetime.now(timezone.utc),
     })
     logger.debug("WS bid registado — lot: %s | %.0f€", lot_id, highest_bid)
 
@@ -261,7 +261,8 @@ def registar_preco(
         if not (has_offer and not ultimo.get("has_offer", False)):
             return False
 
-    ts = datetime.utcnow()
+    from datetime import timezone
+    ts = datetime.now(timezone.utc)
     db.historico_precos.insert_one({
         "lot_id":     lot_id,
         "valor":      valor,

@@ -14,83 +14,145 @@
       Nenhum leilão encontrado.
     </div>
  
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      <Card
-        v-for="l in leiloesOrdenados"
-        :key="l.sale_id"
-        class="cursor-pointer hover:shadow-md transition-shadow"
-        @click="$router.push(`/leiloes/${l.sale_id}`)"
-      >
-        <template #title>
-          <div class="flex items-start justify-between gap-2 mb-1">
-            <div class="flex-1 min-w-0">
-              <span class="text-sm font-semibold text-blue-600 leading-snug">{{ l.nome }}</span>
-              <p v-if="l.descricao" class="text-xs font-semibold text-slate-800 uppercase tracking-wide mb-1">
-                {{ l.descricao }}
-              </p>
-              
+    <div v-else>
+      <!-- Leilões abertos -->
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <Card
+          v-for="l in leiloesAtivos"
+          :key="l.sale_id"
+          class="cursor-pointer hover:shadow-md transition-shadow"
+          @click="$router.push(`/leiloes/${l.sale_id}`)"
+        >
+          <template #title>
+            <div class="flex items-start justify-between gap-2 mb-1">
+              <div class="flex-1 min-w-0">
+                <span class="text-sm font-semibold text-blue-600 leading-snug">{{ l.nome }}</span>
+                <p v-if="l.descricao" class="text-xs font-semibold text-slate-800 uppercase tracking-wide mb-1">
+                  {{ l.descricao }}
+                </p>
+              </div>
+              <Tag value="Aberto" severity="success" class="shrink-0" />
             </div>
-            <Tag
-              :value="l.estado === 3 ? 'Aberto' : 'Encerrado'"
-              :severity="l.estado === 3 ? 'success' : 'secondary'"
-              class="shrink-0"
-            />
-          </div>
-        </template>
-        <template #content>
-          <div class="pt-2 border-t border-slate-100 flex gap-3">
-            <!-- Datas + contadores -->
-            <div class="flex-1 space-y-1.5 text-xs text-slate-500">
-              <div class="flex items-center gap-1.5">
-                <i class="pi pi-car text-xs" />
-                <span>{{ l.num_veiculos }} veículos</span>
+          </template>
+          <template #content>
+            <div class="pt-2 border-t border-slate-100 flex gap-3">
+              <div class="flex-1 space-y-1.5 text-xs text-slate-500">
+                <div class="flex items-center gap-1.5">
+                  <i class="pi pi-car text-xs" />
+                  <span>{{ l.num_veiculos }} veículos</span>
+                </div>
+                <div v-if="l.data_inicio" class="flex items-center gap-1.5">
+                  <i class="pi pi-calendar text-xs" />
+                  <span>Início: {{ formatDate(l.data_inicio) }}</span>
+                </div>
+                <div v-if="l.data_fim" class="flex items-center gap-1.5">
+                  <i class="pi pi-clock text-xs" />
+                  <span>Fecho: {{ formatDate(l.data_fim) }}</span>
+                </div>
+                <div v-if="l.scrape_ts" class="flex items-center gap-1.5 text-slate-400">
+                  <i class="pi pi-database text-xs" />
+                  <span>Introduzido: {{ formatDate(l.scrape_ts) }}</span>
+                </div>
               </div>
-              <div v-if="l.data_inicio" class="flex items-center gap-1.5">
-                <i class="pi pi-calendar text-xs" />
-                <span>Início: {{ formatDate(l.data_inicio) }}</span>
-              </div>
-              <div v-if="l.data_fim" class="flex items-center gap-1.5">
-                <i class="pi pi-clock text-xs" />
-                <span>Fecho: {{ formatDate(l.data_fim) }}</span>
-              </div>
-              <div v-if="l.scrape_ts" class="flex items-center gap-1.5 text-slate-400">
-                <i class="pi pi-database text-xs" />
-                <span>Introduzido: {{ formatDate(l.scrape_ts) }}</span>
+              <div v-if="l.stats_total > 0" class="shrink-0 flex items-center">
+                <svg viewBox="0 0 100 56" class="w-24 h-auto">
+                  <path d="M 8.6 46.7 A 42 42 0 0 1 91.4 46.7"
+                        fill="none" stroke="#e2e8f0" stroke-width="7" stroke-linecap="round"/>
+                  <path v-if="l.stats_licitados > 0"
+                        :d="gaugeArcPath(l.stats_licitados, l.stats_total)"
+                        fill="none"
+                        :stroke="licitacaoColor(l.stats_licitados, l.stats_total)"
+                        stroke-width="7" stroke-linecap="round"/>
+                  <line x1="50" y1="54"
+                        :x2="gaugePt(l.stats_licitados, l.stats_total).x"
+                        :y2="gaugePt(l.stats_licitados, l.stats_total).y"
+                        stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="50" cy="54" r="2.5" fill="#334155"/>
+                  <text x="3" y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">0</text>
+                  <text :x="l.stats_total >= 100 ? 79 : l.stats_total >= 10 ? 84 : 89"
+                        y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">{{ l.stats_total }}</text>
+                  <text x="50" y="38" font-size="11" text-anchor="middle" font-weight="600"
+                        :fill="licitacaoColor(l.stats_licitados, l.stats_total)"
+                        font-family="sans-serif">{{ l.stats_licitados }}</text>
+                </svg>
               </div>
             </div>
-            <!-- Gauge -->
-            <div v-if="l.stats_total > 0" class="shrink-0 flex items-center">
-              <svg viewBox="0 0 100 56" class="w-24 h-auto">
-                <!-- Arco de fundo -->
-                <path d="M 8.6 46.7 A 42 42 0 0 1 91.4 46.7"
-                      fill="none" stroke="#e2e8f0" stroke-width="7" stroke-linecap="round"/>
-                <!-- Arco preenchido -->
-                <path v-if="l.stats_licitados > 0"
-                      :d="gaugeArcPath(l.stats_licitados, l.stats_total)"
-                      fill="none"
-                      :stroke="licitacaoColor(l.stats_licitados, l.stats_total)"
-                      stroke-width="7" stroke-linecap="round"/>
-                <!-- Ponteiro -->
-                <line x1="50" y1="54"
-                      :x2="gaugePt(l.stats_licitados, l.stats_total).x"
-                      :y2="gaugePt(l.stats_licitados, l.stats_total).y"
-                      stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
-                <!-- Ponto central -->
-                <circle cx="50" cy="54" r="2.5" fill="#334155"/>
-                <!-- Etiqueta esquerda (0) -->
-                <text x="3" y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">0</text>
-                <!-- Etiqueta direita (total) -->
-                <text :x="l.stats_total >= 100 ? 79 : l.stats_total >= 10 ? 84 : 89"
-                      y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">{{ l.stats_total }}</text>
-                <!-- Valor central -->
-                <text x="50" y="38" font-size="11" text-anchor="middle" font-weight="600"
-                      :fill="licitacaoColor(l.stats_licitados, l.stats_total)"
-                      font-family="sans-serif">{{ l.stats_licitados }}</text>
-              </svg>
+          </template>
+        </Card>
+      </div>
+
+      <!-- Separador -->
+      <div v-if="leiloesEncerrados.length > 0" class="flex items-center gap-3 my-6">
+        <div class="flex-1 border-t border-slate-200" />
+        <span class="text-xs text-slate-400 uppercase tracking-wider">Encerrados</span>
+        <div class="flex-1 border-t border-slate-200" />
+      </div>
+
+      <!-- Leilões encerrados -->
+      <div v-if="leiloesEncerrados.length > 0" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <Card
+          v-for="l in leiloesEncerrados"
+          :key="l.sale_id"
+          class="cursor-pointer hover:shadow-md transition-shadow opacity-60"
+          @click="$router.push(`/leiloes/${l.sale_id}`)"
+        >
+          <template #title>
+            <div class="flex items-start justify-between gap-2 mb-1">
+              <div class="flex-1 min-w-0">
+                <span class="text-sm font-semibold text-blue-600 leading-snug">{{ l.nome }}</span>
+                <p v-if="l.descricao" class="text-xs font-semibold text-slate-800 uppercase tracking-wide mb-1">
+                  {{ l.descricao }}
+                </p>
+              </div>
+              <Tag value="Encerrado" severity="secondary" class="shrink-0" />
             </div>
-          </div>
-        </template>
-      </Card>
+          </template>
+          <template #content>
+            <div class="pt-2 border-t border-slate-100 flex gap-3">
+              <div class="flex-1 space-y-1.5 text-xs text-slate-500">
+                <div class="flex items-center gap-1.5">
+                  <i class="pi pi-car text-xs" />
+                  <span>{{ l.num_veiculos }} veículos</span>
+                </div>
+                <div v-if="l.data_inicio" class="flex items-center gap-1.5">
+                  <i class="pi pi-calendar text-xs" />
+                  <span>Início: {{ formatDate(l.data_inicio) }}</span>
+                </div>
+                <div v-if="l.data_fim" class="flex items-center gap-1.5">
+                  <i class="pi pi-clock text-xs" />
+                  <span>Fecho: {{ formatDate(l.data_fim) }}</span>
+                </div>
+                <div v-if="l.scrape_ts" class="flex items-center gap-1.5 text-slate-400">
+                  <i class="pi pi-database text-xs" />
+                  <span>Introduzido: {{ formatDate(l.scrape_ts) }}</span>
+                </div>
+              </div>
+              <div v-if="l.stats_total > 0" class="shrink-0 flex items-center">
+                <svg viewBox="0 0 100 56" class="w-24 h-auto">
+                  <path d="M 8.6 46.7 A 42 42 0 0 1 91.4 46.7"
+                        fill="none" stroke="#e2e8f0" stroke-width="7" stroke-linecap="round"/>
+                  <path v-if="l.stats_licitados > 0"
+                        :d="gaugeArcPath(l.stats_licitados, l.stats_total)"
+                        fill="none"
+                        :stroke="licitacaoColor(l.stats_licitados, l.stats_total)"
+                        stroke-width="7" stroke-linecap="round"/>
+                  <line x1="50" y1="54"
+                        :x2="gaugePt(l.stats_licitados, l.stats_total).x"
+                        :y2="gaugePt(l.stats_licitados, l.stats_total).y"
+                        stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
+                  <circle cx="50" cy="54" r="2.5" fill="#334155"/>
+                  <text x="3" y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">0</text>
+                  <text :x="l.stats_total >= 100 ? 79 : l.stats_total >= 10 ? 84 : 89"
+                        y="56" font-size="7" fill="#94a3b8" font-family="sans-serif">{{ l.stats_total }}</text>
+                  <text x="50" y="38" font-size="11" text-anchor="middle" font-weight="600"
+                        :fill="licitacaoColor(l.stats_licitados, l.stats_total)"
+                        font-family="sans-serif">{{ l.stats_licitados }}</text>
+                </svg>
+              </div>
+            </div>
+          </template>
+        </Card>
+      </div>
     </div>
 
   </div>
@@ -105,13 +167,17 @@ import ProgressSpinner from 'primevue/progressspinner'
 const leiloes = ref([])
 const loading = ref(true)
 
-const leiloesOrdenados = computed(() => [...leiloes.value].sort((a, b) => {
-  // Leilões abertos primeiro
-  if (a.estado === 3 && b.estado !== 3) return -1
-  if (a.estado !== 3 && b.estado === 3) return 1
-  // Dentro do mesmo estado, mais recente primeiro
-  return new Date(b.data_inicio ?? 0) - new Date(a.data_inicio ?? 0)
-}))
+const leiloesAtivos = computed(() =>
+  [...leiloes.value]
+    .filter(l => l.estado === 3)
+    .sort((a, b) => new Date(b.data_inicio ?? 0) - new Date(a.data_inicio ?? 0))
+)
+
+const leiloesEncerrados = computed(() =>
+  [...leiloes.value]
+    .filter(l => l.estado !== 3)
+    .sort((a, b) => new Date(b.data_inicio ?? 0) - new Date(a.data_inicio ?? 0))
+)
 
 onMounted(async () => {
   const res = await fetch('/api/leiloes')

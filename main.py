@@ -38,10 +38,11 @@ import signalr_listener
 # Configuração de logging
 # ---------------------------------------------------------------------------
 
-LOG_FORMAT  = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
-LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
-LOG_FILE    = "everest.log"
-LOG_HOURS   = 72
+LOG_FORMAT    = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
+LOG_DATEFMT   = "%Y-%m-%d %H:%M:%S"
+LOG_FILE      = "everest.log"
+LOG_HOURS     = int(os.getenv("LOG_HOURS", 240))
+LOG_TRIM_HOUR = int(os.getenv("LOG_TRIM_HOUR", 23))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,17 +81,21 @@ def _trim_log(path: str = LOG_FILE, hours: int = LOG_HOURS) -> None:
 
 
 def _start_log_trim_thread() -> None:
-    """Thread que limpa o log todos os dias às 23:00."""
+    """Thread que limpa o log diariamente à hora definida em LOG_TRIM_HOUR."""
+    from datetime import timedelta
     def run():
         while True:
-            now = datetime.utcnow()
-            # Calcular segundos até às 23:00 de hoje (ou amanhã se já passou)
-            target = now.replace(hour=23, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target = target.replace(day=target.day + 1)
-            sleep_secs = (target - now).total_seconds()
-            time.sleep(sleep_secs)
-            _trim_log()
+            try:
+                now = datetime.utcnow()
+                target = now.replace(hour=LOG_TRIM_HOUR, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target += timedelta(days=1)
+                sleep_secs = (target - now).total_seconds()
+                time.sleep(sleep_secs)
+                _trim_log()
+            except Exception as e:
+                logger.warning("Erro na thread de trim do log: %s", e)
+                time.sleep(3600)
     t = threading.Thread(target=run, name="log-trim", daemon=True)
     t.start()
 
@@ -157,7 +162,7 @@ def run_cycle(session, db) -> None:
     # 2b. Marcar como encerrados os leilões que já não aparecem na homepage
     sale_ids_ativos = {l.sale_id for l in leiloes}
     resultado = db.leiloes.update_many(
-        {"estado": 3, "sale_id": {"$nin": list(sale_ids_ativos)}},
+        {"estado": 3, "fonte": {"$exists": False}, "sale_id": {"$nin": list(sale_ids_ativos)}},
         {"$set": {"estado": 4}},
     )
     if resultado.modified_count:
@@ -260,13 +265,13 @@ def start_signalr_thread(session, db) -> threading.Thread:
             logger.error("Erro ao registar licitacao WS: %s", e)
 
     def get_sale_ids() -> list[str]:
-        leiloes = db.leiloes.find({"estado": 3}, {"sale_id": 1, "_id": 0})
+        leiloes = db.leiloes.find({"estado": 3, "fonte": {"$exists": False}}, {"sale_id": 1, "_id": 0})
         return [str(l["sale_id"]) for l in leiloes]
 
     def get_closing_date():
         # Devolve o closing_date mais próximo entre os leilões activos
         from datetime import timezone
-        leiloes = list(db.leiloes.find({"estado": 3}, {"closing_date": 1, "_id": 0}))
+        leiloes = list(db.leiloes.find({"estado": 3, "fonte": {"$exists": False}}, {"closing_date": 1, "_id": 0}))
         datas = []
         for l in leiloes:
             raw = l.get("closing_date", "")

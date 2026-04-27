@@ -14,14 +14,25 @@
 
         <div class="w-px h-5 bg-slate-200 mx-1" />
 
-        <div class="flex gap-2 ml-auto w-72">
+        <router-link
+          to="/analises"
+          class="text-sm text-slate-600 hover:text-blue-600 no-underline shrink-0 transition-colors"
+          active-class="text-blue-600 font-semibold"
+        >
+          Análises
+        </router-link>
+
+        <div class="w-px h-5 bg-slate-200 mx-1" />
+
+        <div class="flex gap-2 ml-auto w-80">
           <IconField class="flex-1">
             <InputIcon class="pi pi-search" />
             <InputText
               v-model="matricula"
-              placeholder="Matrícula ou ID da viatura..."
+              placeholder="Matrícula, ID, marca ou modelo..."
               class="w-full"
               @keydown.enter="pesquisar"
+              autocomplete="off"
             />
           </IconField>
           <Button icon="pi pi-search" :loading="loading" @click="pesquisar" />
@@ -53,31 +64,35 @@ const matricula = ref('')
 const loading   = ref(false)
 const erro      = ref('')
 
-// lot_id são números com 7+ dígitos; matrícula tem letras e hífens
-function isLotId(q) {
-  return /^\d{5,}$/.test(q)
-}
+function isLotId(q)     { return /^\d{5,}$/.test(q) }
+function isMatricula(q) { return /^[A-Za-z0-9]{2}-[A-Za-z0-9]{2}-[A-Za-z0-9]{2}$/.test(q) }
 
 async function pesquisar() {
   const q = matricula.value.trim()
   if (!q) return
 
-  loading.value = true
-  erro.value    = ''
+  erro.value = ''
 
-  const param = isLotId(q) ? `lot_id=${encodeURIComponent(q)}` : `matricula=${encodeURIComponent(q)}`
-  const res        = await fetch(`/api/pesquisa?${param}`)
-  const resultados = await res.json()
+  // Matrícula ou lot_id → pesquisa direta para o veículo
+  if (isLotId(q) || isMatricula(q)) {
+    loading.value = true
+    const param      = isLotId(q) ? `lot_id=${encodeURIComponent(q)}` : `matricula=${encodeURIComponent(q)}`
+    const res        = await fetch(`/api/pesquisa?${param}`)
+    const resultados = await res.json()
+    loading.value = false
 
-  loading.value = false
-
-  if (!resultados.length) {
-    erro.value = `"${q.toUpperCase()}" não encontrado.`
-    setTimeout(() => { erro.value = '' }, 3000)
+    if (!resultados.length) {
+      erro.value = `"${q.toUpperCase()}" não encontrado.`
+      setTimeout(() => { erro.value = '' }, 3000)
+      return
+    }
+    matricula.value = ''
+    router.push(`/veiculos/${resultados[0].veiculo.veiculo_id}`)
     return
   }
 
+  // Marca/modelo → página de resultados
   matricula.value = ''
-  router.push(`/veiculos/${resultados[0].veiculo.veiculo_id}`)
+  router.push(`/pesquisa?q=${encodeURIComponent(q)}`)
 }
 </script>

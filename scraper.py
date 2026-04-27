@@ -92,6 +92,7 @@ class Participacao:
     is_withdrawn:   bool
     has_offer:      bool
     base_licitacao: float | None = None
+    fonte:          str = "ayvens"
     scrape_ts:      datetime = field(default_factory=datetime.utcnow)
 
 
