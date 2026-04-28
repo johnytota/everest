@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: 123
+      MONGO_INITDB_ROOT_PASSWORD: WHqpp1Tu7jRFhFYs
     volumes:
       - mongo_data:/data/db
 
@@ -17,7 +17,7 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
-      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+      MONGO_URI: mongodb://root:WHqpp1Tu7jRFhFYs@mongo:27017/?authSource=admin
     depends_on:
       - mongo
 
@@ -27,7 +27,7 @@ services:
     command: python main.py
     env_file: .env
     environment:
-      MONGO_URI: mongodb://root:123@mongo:27017/?authSource=admin
+      MONGO_URI: mongodb://root:WHqpp1Tu7jRFhFYs@mongo:27017/?authSource=admin
       TZ: Europe/Lisbon
     depends_on:
       - mongo
