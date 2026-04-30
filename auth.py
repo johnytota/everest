@@ -95,7 +95,7 @@ def _login_playwright(username: str, password: str) -> dict | None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -144,6 +144,7 @@ def _login_playwright(username: str, password: str) -> dict | None:
             # Tentar clicar no botão de login
             login_found = False
             for selector in [
+                "#btn_login",
                 "#BtnHeader_login",
                 "a#BtnHeader_login",
                 "#btn_signIn",
@@ -170,15 +171,39 @@ def _login_playwright(username: str, password: str) -> dict | None:
             # Aguardar modal de login abrir
             logger.info("Playwright — a aguardar modal de login...")
             page.wait_for_timeout(1500)
-            page.wait_for_selector("input[name='userName']", state="visible", timeout=10000)
+            page.wait_for_selector("#userName, input[name='userName']", state="visible", timeout=10000)
 
-            # Preencher formulário do modal
-            logger.info("Playwright — a preencher credenciais...")
-            page.fill("input[name='userName']", username)
-            page.fill("input[name='password']", password)
+            # Preencher formulário do modal — tenta por ID, fallback por name
+            if page.query_selector("#userName"):
+                logger.info("Playwright — a preencher credenciais (por ID)...")
+                page.fill("#userName", username)
+                page.fill("#password", password)
+            else:
+                logger.info("Playwright — a preencher credenciais (por name)...")
+                page.fill("input[name='userName']", username)
+                page.fill("input[name='password']", password)
 
             # Submeter
-            page.click("button.signin-btn")
+            submit_found = False
+            for submit_sel in [
+                "button#btn_login",
+                "carmarket-button[buttonid='btn_login'] button",
+                "button.signin-btn",
+                "button[type='submit']",
+            ]:
+                try:
+                    el = page.query_selector(submit_sel)
+                    if el and el.is_visible():
+                        logger.info("Playwright — a submeter login (%s)...", submit_sel)
+                        el.click()
+                        submit_found = True
+                        break
+                except Exception as e:
+                    logger.warning("Playwright — erro ao submeter %s: %s", submit_sel, e)
+            if not submit_found:
+                logger.error("Botão de submissão do login não encontrado.")
+                browser.close()
+                return None
 
             # Aguardar fecho do modal ou navegação
             page.wait_for_load_state("networkidle", timeout=30000)
