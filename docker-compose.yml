@@ -30,7 +30,7 @@ services:
       MONGO_URI: mongodb://root:WHqpp1Tu7jRFhFYs@mongo:27017/?authSource=admin
       TZ: Europe/Lisbon
     volumes:
-      - cookies:/app/cookies.json
+      - /root/everest/cookies.json:/app/cookies.json
     depends_on:
       - mongo
 
