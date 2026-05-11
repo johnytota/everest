@@ -71,7 +71,7 @@ def _load_cookies(session: requests.Session) -> bool:
     return True
 
 
-def _is_session_valid(session: requests.Session) -> bool:
+def is_session_valid(session: requests.Session) -> bool:
     """Valida a sessão fazendo um pedido à homepage."""
     try:
         resp = session.get(HOME_URL, headers=HEADERS, timeout=15)
@@ -108,6 +108,23 @@ def _login_playwright(username: str, password: str) -> dict | None:
         )
         # Ocultar WebDriver flag
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        # Carregar cookies guardados no contexto Playwright (inclui consentimento GDPR)
+        # Os cookies de autenticação NÃO são pré-carregados para garantir que o check
+        # de login só passa quando cookies frescos são recebidos do servidor.
+        if COOKIES_FILE.exists():
+            try:
+                saved = json.loads(COOKIES_FILE.read_text())
+                pw_cookies = [
+                    {"name": k, "value": v, "domain": ".carmarket.ayvens.com", "path": "/"}
+                    for k, v in saved.items()
+                    if k not in REQUIRED_COOKIES
+                ]
+                context.add_cookies(pw_cookies)
+                logger.info("Playwright — %d cookies pré-carregados no contexto.", len(pw_cookies))
+            except Exception as e:
+                logger.warning("Playwright — erro ao pré-carregar cookies: %s", e)
+
         page = context.new_page()
 
         try:
@@ -183,6 +200,24 @@ def _login_playwright(username: str, password: str) -> dict | None:
                 page.fill("input[name='userName']", username)
                 page.fill("input[name='password']", password)
 
+            # Dispensar banner de cookies se estiver ativo
+            for cookie_sel in [
+                "#onetrust-accept-btn-handler",
+                "button#accept-cookies",
+                "button.cookie-accept",
+                "button:has-text('Aceitar')",
+                "button:has-text('Accept')",
+            ]:
+                try:
+                    el = page.query_selector(cookie_sel)
+                    if el and el.is_visible():
+                        logger.info("Playwright — a dispensar banner de cookies (%s)...", cookie_sel)
+                        el.click()
+                        page.wait_for_timeout(500)
+                        break
+                except Exception:
+                    pass
+
             # Submeter
             submit_found = False
             for submit_sel in [
@@ -224,6 +259,14 @@ def _login_playwright(username: str, password: str) -> dict | None:
             # Extrair cookies
             pw_cookies = context.cookies()
             cookies_dict = {c["name"]: c["value"] for c in pw_cookies}
+
+            # Remover CarmarketV2SessionExpirationTime se já estiver expirado.
+            # O site não o atualiza durante o login, ficando o valor antigo nos cookies
+            # pré-carregados — o que causaria um loop imediato na thread de renovação.
+            exp = cookies_dict.get("CarmarketV2SessionExpirationTime")
+            if exp and int(exp) / 1000 <= time.time():
+                del cookies_dict["CarmarketV2SessionExpirationTime"]
+                logger.info("Playwright — cookie de expiração já expirado, removido.")
 
             if not REQUIRED_COOKIES.issubset(cookies_dict.keys()):
                 logger.error("Login falhado — cookies de autenticação não recebidos.")
@@ -281,7 +324,7 @@ def get_authenticated_session(username: str, password: str) -> requests.Session 
     session.headers.update(HEADERS)
 
     if _load_cookies(session):
-        if _is_session_valid(session):
+        if is_session_valid(session):
             return session
         logger.info("Cookies carregados mas sessão inválida — a renovar login.")
         session.cookies.clear()

@@ -20,7 +20,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from auth import get_authenticated_session, renew_session, session_expiration_ts
+from auth import get_authenticated_session, is_session_valid, renew_session, session_expiration_ts
 from database import (
     get_db,
     registar_licitacao_ws,
@@ -203,8 +203,14 @@ def start_session_renewal_thread(session, stop_event: threading.Event) -> thread
             try:
                 ts = session_expiration_ts(session)
                 if ts is None:
-                    logger.warning("Renovação sessão — sem timestamp de expiração, a tentar em 5 minutos.")
                     stop_event.wait(300)
+                    if stop_event.is_set():
+                        break
+                    if not is_session_valid(session):
+                        logger.info("Sessão expirada — a renovar...")
+                        ok = renew_session(session, USERNAME, PASSWORD)
+                        if not ok:
+                            logger.error("Falha ao renovar sessão — nova tentativa em 5 minutos.")
                     continue
 
                 sleep_seconds = max(0, (ts - time.time()) - MARGIN)
